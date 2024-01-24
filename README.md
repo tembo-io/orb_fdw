@@ -2,13 +2,16 @@
 
 This is a simple open-source data wrapper that bridges the gap between your Postgres database and [Orb](https://www.withorb.com/) a leading usage-based billing solution.
 
+[![Static Badge](https://img.shields.io/badge/%40tembo-community?logo=slack&label=slack)](https://join.slack.com/t/tembocommunity/shared_invite/zt-20dtnhcmo-pLNV7_Aobi50TdTLpfQ~EQ)
+[![PGXN version](https://badge.fury.io/pg/orb_fdw.svg)](https://pgxn.org/dist/orb_fdw/)
+
 ### Pre-requisistes
 
 - have the v0.0.1 of `orb_fdw` extension enabled in your instance
 
 Create the foreign data wrapper:
 
-```
+``` sql
 create foreign data wrapper orb_wrapper
   handler orb_fdw_handler
   validator orb_fdw_validator;
@@ -16,7 +19,7 @@ create foreign data wrapper orb_wrapper
 
 Connect to clerk using your credentials:
 
-```
+``` sql
 create server my_orb_server
   foreign data wrapper orb_wrapper
   options (
@@ -29,7 +32,7 @@ Create Foreign Table:
 
 This table will store information about the users.
 
-```
+``` sql
 create foreign table orb_customers (
   user_id text,
   organization_id text,
@@ -48,7 +51,7 @@ create foreign table orb_customers (
 
 This table will store information about the subscriptions.
 
-```
+``` sql
 create foreign table orb_subscriptions (
     subscription_id text,
     organization_id text,
