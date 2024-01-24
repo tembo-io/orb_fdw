@@ -1,0 +1,13 @@
+[extension]
+name = "orb_fdw"
+repository = "https://github.com/tembo-io/orb_fdw"
+license = "PostgreSQL"
+description = "Postgres Foreign Data Wrapper for withorb.com Backend API"
+homepage = "https://github.com/tembo-io/orb_fdw"
+documentation = "https://github.com/tembo-io/orb_fdw"
+categories = ["connectors"]
+version = "0.2.6"
+
+[build]
+postgres_version = "15"
+platform = "linux/amd64"

@@ -1,0 +1,5 @@
+comment = 'orb_fdw:  A foreign data wrapper for Orb'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/orb_fdw'
+relocatable = false
+superuser = true
