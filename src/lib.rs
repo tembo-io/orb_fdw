@@ -1,3 +1,4 @@
+use orb_billing::Subscription;
 use pgrx::warning;
 use pgrx::{pg_sys, prelude::*, JsonB};
 use serde_json::Value as JsonValue;
@@ -37,11 +38,16 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                 resp,
                 "data",
                 vec![
-                    ("subscription_id", "subscription_id", "string"),
+                    ("id", "subscription_id", "string"),
+                    ("customer.external_customer_id", "organization_id", "string"),
                     ("status", "status", "string"),
-                    ("plan", "plan", "string"),
-                    ("started_date", "started_date", "i64"),
-                    ("end_date", "end_date", "i64"),
+                    ("plan.external_plan_id", "plan", "string"),
+                    (
+                        "current_billing_period_start_date",
+                        "started_date",
+                        "string",
+                    ),
+                    ("current_billing_period_end_date", "end_date", "string"),
                 ],
                 tgt_cols,
             );
@@ -153,7 +159,7 @@ impl OrbFdw {
     const DEFAULT_ROWS_LIMIT: usize = 10_000;
 
     // TODO: will have to incorportate offset at some point
-    const PAGE_SIZE: usize = 5;
+    const PAGE_SIZE: usize = 500;
 
     fn build_url(&self, obj: &str, options: &HashMap<String, String>, offset: usize) -> String {
         match obj {
@@ -230,7 +236,6 @@ impl ForeignDataWrapper for OrbFdw {
             let mut result = Vec::new();
 
             let url = self.build_url(&obj, options, 0);
-            info!("url: {}", url);
 
             let body = self
                 .rt
@@ -243,7 +248,6 @@ impl ForeignDataWrapper for OrbFdw {
                 .unwrap();
 
             let json: JsonValue = serde_json::from_str(&body).unwrap();
-            info!("json: {:#?}", json);
             let mut rows = resp_to_rows(&obj, &json, columns);
             result.append(&mut rows);
 

@@ -51,13 +51,14 @@ This table will store information about the subscriptions.
 ```
 create foreign table orb_subscriptions (
     subscription_id text,
+    organization_id text,
     status text,
     plan text,
-    started_at bigint,
-    end_date bigint
-)
-server my_orb_server
-options (
-  object 'subscriptions'
-);
+    started_date text,
+    end_date text
+  )
+  server my_orb_server
+  options (
+    object 'subscriptions'
+  );
 ```
