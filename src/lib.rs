@@ -1,6 +1,5 @@
 use pgrx::warning;
 use pgrx::{pg_sys, prelude::*, JsonB};
-use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::env;
@@ -9,7 +8,7 @@ use supabase_wrappers::prelude::*;
 use tokio::runtime::Runtime;
 pgrx::pg_module_magic!();
 mod orb_fdw;
-use crate::orb_fdw::{OrbFdwError, OrbFdwResult};
+use crate::orb_fdw::OrbFdwError;
 use reqwest::{self, header};
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
@@ -24,11 +23,11 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                 "data",
                 vec![
                     ("id", "user_id", "string"),
-                    ("external_id", "organization_id", "string"),
+                    ("external_customer_id", "organization_id", "string"),
                     ("name", "first_name", "string"),
                     ("email", "email", "string"),
                     ("payment_provider_id", "stripe_id", "string"),
-                    ("created_at", "created_at", "i64"),
+                    ("created_at", "created_at", "string"),
                 ],
                 tgt_cols,
             );
@@ -54,45 +53,6 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
 
     result
 }
-
-// fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
-
-//     let mut result = Vec::new();
-//     match obj {
-//         "customers" => {
-//             result = body_to_rows(
-//                 resp,
-//                 "data",
-//                 vec![
-//                     ("id", "user_id", "string"),
-//                     ("external_id", "organization_id", "string"),
-//                     ("name", "first_name", "string"),
-//                     ("email", "email", "string"),
-//                     ("payment_provider_id", "stripe_id", "string"),
-//                     ("created_at", "created_at", "i64"),
-//                 ],
-//                 tgt_cols,
-//             );
-//         }
-//         "subscriptions" => result = body_to_rows(
-//             resp,
-//             "data",
-//             vec![
-//                 ("subscription_id", "subscription_id", "string"),
-//                 ("status", "status", "string"),
-//                 ("plan", "plan", "string"),
-//                 ("started_date", "started_date", "i64"),
-//                 ("end_date", "end_date", "i64"),
-//             ],
-//             tgt_cols,
-//         ),
-//         _ => {
-//             warning!("unsupported object: {}", obj);
-//         }
-
-//         result
-//     }
-// }
 
 fn body_to_rows(
     resp: &JsonValue,
@@ -193,7 +153,7 @@ impl OrbFdw {
     const DEFAULT_ROWS_LIMIT: usize = 10_000;
 
     // TODO: will have to incorportate offset at some point
-    const PAGE_SIZE: usize = 500;
+    const PAGE_SIZE: usize = 5;
 
     fn build_url(&self, obj: &str, options: &HashMap<String, String>, offset: usize) -> String {
         match obj {
@@ -212,15 +172,6 @@ impl OrbFdw {
                 return "".to_string();
             }
         }
-    }
-
-    fn convert_to_json<T, E>(self, items: Vec<Result<T, E>>) -> JsonValue
-    where
-        T: Serialize,
-    {
-        let items: Vec<Option<T>> = items.into_iter().map(|result| result.ok()).collect();
-
-        serde_json::to_value(items).unwrap_or_else(|_| JsonValue::Null)
     }
 }
 
@@ -273,16 +224,9 @@ impl ForeignDataWrapper for OrbFdw {
             None => return,
         };
 
-        let row_cnt_limit = options
-            .get("limit")
-            .map(|n| n.parse::<usize>())
-            .transpose()
-            .unwrap_or(Some(Self::DEFAULT_ROWS_LIMIT));
-
         self.scan_result = None;
 
         if let Some(client) = &self.client {
-            let mut next_page: Option<String> = None;
             let mut result = Vec::new();
 
             let url = self.build_url(&obj, options, 0);
@@ -299,14 +243,9 @@ impl ForeignDataWrapper for OrbFdw {
                 .unwrap();
 
             let json: JsonValue = serde_json::from_str(&body).unwrap();
+            info!("json: {:#?}", json);
             let mut rows = resp_to_rows(&obj, &json, columns);
             result.append(&mut rows);
-
-            // get next page token, stop fetching if no more pages
-            next_page = json
-                .get("nextPageToken")
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_owned());
 
             self.scan_result = Some(result);
         }

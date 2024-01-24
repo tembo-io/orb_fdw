@@ -36,7 +36,7 @@ create foreign table orb_customers (
   first_name text,
   email text,
   stripe_id text,
-  created_at bigint
+  created_at text
   )
   server my_orb_server
   options (
