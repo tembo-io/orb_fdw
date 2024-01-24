@@ -1,6 +1,6 @@
 [package]
 name = "orb_fdw"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2021"
 
 [lib]
@@ -16,17 +16,22 @@ pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg_test = []
 
 [dependencies]
-pgrx = "=0.11.2"
+reqwest-retry = "0.2.2"
+pgrx = "=0.9.7"
 orb-billing = "0.9.0"
-supabase-wrappers = "0.1.17"
+supabase-wrappers = "=0.1.15"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 futures = "0.3.28"
 thiserror = "1.0.48"
+http = "0.2.4"
+reqwest = { version = "0.11.4", features = ["json"] }
+reqwest-middleware = "0.2.4"
+url = "2.2.2"
 
 [dev-dependencies]
-pgrx-tests = "=0.11.2"
+pgrx-tests = "=0.9.7"
 
 [profile.dev]
 panic = "unwind"

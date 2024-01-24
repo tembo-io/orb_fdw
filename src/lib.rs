@@ -8,101 +8,12 @@ use std::str::FromStr;
 use supabase_wrappers::prelude::*;
 use tokio::runtime::Runtime;
 pgrx::pg_module_magic!();
-use futures::StreamExt;
-use orb_billing::{Client, ClientConfig, ListParams, SubscriptionListParams};
-use pgrx::pg_sys::panic::ErrorReport;
-use pgrx::prelude::PgSqlErrorCode;
-use thiserror::Error;
+mod orb_fdw;
+use crate::orb_fdw::{OrbFdwError, OrbFdwResult};
+use reqwest::{self, header};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 
-#[derive(Error, Debug)]
-enum OrbFdwError {
-    #[error("{0}")]
-    OptionsError(#[from] OptionsError),
-
-    #[error("{0}")]
-    CreateRuntimeError(#[from] CreateRuntimeError),
-
-    #[error("parse JSON response failed: {0}")]
-    JsonParseError(#[from] serde_json::Error),
-}
-
-impl From<OrbFdwError> for ErrorReport {
-    fn from(value: OrbFdwError) -> Self {
-        ErrorReport::new(PgSqlErrorCode::ERRCODE_FDW_ERROR, format!("{value}"), "")
-    }
-}
-
-type OrbFdwResult<T> = Result<T, OrbFdwError>;
-
-fn body_to_rows(
-    resp: &JsonValue,
-    obj_key: &str,
-    normal_cols: Vec<(&str, &str, &str)>,
-    tgt_cols: &[Column],
-) -> Vec<Row> {
-    let mut result = Vec::new();
-
-    let objs = if resp.is_array() {
-        // If `resp` is directly an array
-        resp.as_array().unwrap()
-    } else {
-        // If `resp` is an object containing the array under `obj_key`
-        match resp
-            .as_object()
-            .and_then(|v| v.get(obj_key))
-            .and_then(|v| v.as_array())
-        {
-            Some(objs) => objs,
-            None => return result,
-        }
-    };
-
-    for obj in objs {
-        let mut row = Row::new();
-
-        // extract normal columns
-        for tgt_col in tgt_cols {
-            if let Some((src_name, col_name, col_type)) =
-                normal_cols.iter().find(|(_, c, _)| c == &tgt_col.name)
-            {
-                // Navigate through nested properties
-                let mut current_value: Option<&JsonValue> = Some(obj);
-                for part in src_name.split('.') {
-                    current_value = current_value.unwrap().as_object().unwrap().get(part);
-                }
-
-                let cell = current_value.and_then(|v| match *col_type {
-                    "bool" => v.as_bool().map(Cell::Bool),
-                    "i64" => v.as_i64().map(Cell::I64),
-                    "string" => v.as_str().map(|a| Cell::String(a.to_owned())),
-                    "timestamp" => v.as_str().map(|a| {
-                        let secs = a.parse::<i64>().unwrap() / 1000;
-                        let ts = to_timestamp(secs as f64);
-                        Cell::Timestamp(ts.to_utc())
-                    }),
-                    "timestamp_iso" => v.as_str().map(|a| {
-                        let ts = Timestamp::from_str(a).unwrap();
-                        Cell::Timestamp(ts)
-                    }),
-                    "json" => Some(Cell::Json(JsonB(v.clone()))),
-                    _ => None,
-                });
-                row.push(col_name, cell);
-            }
-        }
-
-        // put all properties into 'attrs' JSON column
-        if tgt_cols.iter().any(|c| &c.name == "attrs") {
-            let attrs = serde_json::from_str(&obj.to_string()).unwrap();
-            row.push("attrs", Some(Cell::Json(JsonB(attrs))));
-        }
-
-        result.push(row);
-    }
-    result
-}
-
-// convert response body text to rows
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
     let mut result = Vec::new();
 
@@ -144,25 +55,177 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
     result
 }
 
-fn convert_to_json<T, E>(items: Vec<Result<T, E>>) -> JsonValue
-where
-    T: Serialize,
-{
-    let items: Vec<Option<T>> = items.into_iter().map(|result| result.ok()).collect();
+// fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
 
-    serde_json::to_value(items).unwrap_or_else(|_| JsonValue::Null)
+//     let mut result = Vec::new();
+//     match obj {
+//         "customers" => {
+//             result = body_to_rows(
+//                 resp,
+//                 "data",
+//                 vec![
+//                     ("id", "user_id", "string"),
+//                     ("external_id", "organization_id", "string"),
+//                     ("name", "first_name", "string"),
+//                     ("email", "email", "string"),
+//                     ("payment_provider_id", "stripe_id", "string"),
+//                     ("created_at", "created_at", "i64"),
+//                 ],
+//                 tgt_cols,
+//             );
+//         }
+//         "subscriptions" => result = body_to_rows(
+//             resp,
+//             "data",
+//             vec![
+//                 ("subscription_id", "subscription_id", "string"),
+//                 ("status", "status", "string"),
+//                 ("plan", "plan", "string"),
+//                 ("started_date", "started_date", "i64"),
+//                 ("end_date", "end_date", "i64"),
+//             ],
+//             tgt_cols,
+//         ),
+//         _ => {
+//             warning!("unsupported object: {}", obj);
+//         }
+
+//         result
+//     }
+// }
+
+fn body_to_rows(
+    resp: &JsonValue,
+    obj_key: &str,
+    normal_cols: Vec<(&str, &str, &str)>,
+    tgt_cols: &[Column],
+) -> Vec<Row> {
+    let mut result = Vec::new();
+
+    let objs = if resp.is_array() {
+        // If `resp` is directly an array
+        resp.as_array().unwrap()
+    } else {
+        // If `resp` is an object containing the array under `obj_key`
+        match resp
+            .as_object()
+            .and_then(|v| v.get(obj_key))
+            .and_then(|v| v.as_array())
+        {
+            Some(objs) => objs,
+            None => return result,
+        }
+    };
+
+    for obj in objs {
+        let mut row = Row::new();
+
+        // extract normal columns
+        for tgt_col in tgt_cols {
+            if let Some((src_name, col_name, col_type)) =
+                normal_cols.iter().find(|(_, c, _)| c == &tgt_col.name)
+            {
+                // Navigate through nested properties
+                let mut current_value: Option<&JsonValue> = Some(obj);
+                for part in src_name.split('.') {
+                    current_value = current_value.unwrap().as_object().unwrap().get(part);
+                }
+
+                if *src_name == "email_addresses" {
+                    current_value = current_value
+                        .and_then(|v| v.as_array().and_then(|arr| arr.get(0)))
+                        .and_then(|first_obj| {
+                            first_obj
+                                .as_object()
+                                .and_then(|obj| obj.get("email_address"))
+                        });
+                }
+
+                let cell = current_value.and_then(|v| match *col_type {
+                    "bool" => v.as_bool().map(Cell::Bool),
+                    "i64" => v.as_i64().map(Cell::I64),
+                    "string" => v.as_str().map(|a| Cell::String(a.to_owned())),
+                    "timestamp" => v.as_str().map(|a| {
+                        let secs = a.parse::<i64>().unwrap() / 1000;
+                        let ts = to_timestamp(secs as f64);
+                        Cell::Timestamp(ts.to_utc())
+                    }),
+                    "timestamp_iso" => v.as_str().map(|a| {
+                        let ts = Timestamp::from_str(a).unwrap();
+                        Cell::Timestamp(ts)
+                    }),
+                    "json" => Some(Cell::Json(JsonB(v.clone()))),
+                    _ => None,
+                });
+                row.push(col_name, cell);
+            }
+        }
+
+        // put all properties into 'attrs' JSON column
+        if tgt_cols.iter().any(|c| &c.name == "attrs") {
+            let attrs = serde_json::from_str(&obj.to_string()).unwrap();
+            row.push("attrs", Some(Cell::Json(JsonB(attrs))));
+        }
+
+        result.push(row);
+    }
+    result
 }
 
+#[wrappers_fdw(
+    version = "0.0.1",
+    author = "Jay",
+    website = "https://github.com/",
+    error_type = "OrbFdwError"
+)]
 pub(crate) struct OrbFdw {
     rt: Runtime,
-    client: Option<Client>,
+    client: Option<ClientWithMiddleware>,
     scan_result: Option<Vec<Row>>,
     tgt_cols: Vec<Column>,
-    iter_idx: usize,
 }
 
-impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
-    fn new(options: &HashMap<String, String>) -> OrbFdwResult<Self> {
+impl OrbFdw {
+    const FDW_NAME: &'static str = "OrbFdw";
+    // convert response body text to rows
+
+    const DEFAULT_BASE_URL: &'static str = "https://api.withorb.com/v1";
+    const DEFAULT_ROWS_LIMIT: usize = 10_000;
+
+    // TODO: will have to incorportate offset at some point
+    const PAGE_SIZE: usize = 500;
+
+    fn build_url(&self, obj: &str, options: &HashMap<String, String>, offset: usize) -> String {
+        match obj {
+            "customers" => {
+                let base_url = Self::DEFAULT_BASE_URL.to_owned();
+                let ret = format!("{}/customers?limit={}", base_url, Self::PAGE_SIZE);
+                ret
+            }
+            "subscriptions" => {
+                let base_url = Self::DEFAULT_BASE_URL.to_owned();
+                let ret = format!("{}/subscriptions?limit={}", base_url, Self::PAGE_SIZE);
+                ret
+            }
+            _ => {
+                warning!("unsupported object: {:#?}", obj);
+                return "".to_string();
+            }
+        }
+    }
+
+    fn convert_to_json<T, E>(self, items: Vec<Result<T, E>>) -> JsonValue
+    where
+        T: Serialize,
+    {
+        let items: Vec<Option<T>> = items.into_iter().map(|result| result.ok()).collect();
+
+        serde_json::to_value(items).unwrap_or_else(|_| JsonValue::Null)
+    }
+}
+
+impl ForeignDataWrapper for OrbFdw {
+    fn new(options: &HashMap<String, String>) -> Self {
         let token = if let Some(access_token) = options.get("api_key") {
             access_token.to_owned()
         } else {
@@ -171,18 +234,30 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
             access_token
         };
 
-        let client_config = ClientConfig {
-            api_key: token.to_string(),
-        };
-        let orb_client = Client::new(client_config);
+        let mut headers = header::HeaderMap::new();
+        let value = format!("Bearer {}", token);
+        let mut auth_value = header::HeaderValue::from_str(&value)
+            .map_err(|_| OrbFdwError::InvalidApiKeyHeader)
+            .unwrap();
+        auth_value.set_sensitive(true);
+        headers.insert(header::AUTHORIZATION, auth_value);
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .unwrap();
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+        let client = ClientBuilder::new(client)
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
 
-        Ok(OrbFdw {
-            rt: create_async_runtime()?,
-            client: Some(orb_client),
+        let ret = Self {
+            rt: create_async_runtime(),
+            client: Some(client),
             tgt_cols: Vec::new(),
             scan_result: None,
-            iter_idx: 0,
-        })
+        };
+
+        ret
     }
 
     fn begin_scan(
@@ -192,66 +267,72 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
         _sorts: &[Sort],
         _limit: &Option<Limit>,
         options: &HashMap<String, String>,
-    ) -> OrbFdwResult<()> {
-        let obj = require_option("object", options)?;
+    ) {
+        let obj = match require_option("object", options) {
+            Some(obj) => obj,
+            None => return,
+        };
+
+        let row_cnt_limit = options
+            .get("limit")
+            .map(|n| n.parse::<usize>())
+            .transpose()
+            .unwrap_or(Some(Self::DEFAULT_ROWS_LIMIT));
 
         self.scan_result = None;
-        self.tgt_cols = columns.to_vec();
 
         if let Some(client) = &self.client {
+            let mut next_page: Option<String> = None;
             let mut result = Vec::new();
 
-            self.rt.block_on(async {
-                if obj == "customers" {
-                    let customer_stream =
-                        client.list_customers(&ListParams::DEFAULT.page_size(400));
+            let url = self.build_url(&obj, options, 0);
+            info!("url: {}", url);
 
-                    let customers = customer_stream.collect::<Vec<_>>().await;
-                    let orb_customer = convert_to_json(customers);
-                    let mut rows = resp_to_rows(&obj, &orb_customer, &self.tgt_cols[..]);
-                    result.append(&mut rows);
-                } else if obj == "subscriptions" {
-                    let subscriptions_stream =
-                        client.list_subscriptions(&SubscriptionListParams::DEFAULT.page_size(400));
+            let body = self
+                .rt
+                .block_on(client.get(&url).send())
+                .and_then(|resp| {
+                    resp.error_for_status()
+                        .and_then(|resp| self.rt.block_on(resp.text()))
+                        .map_err(reqwest_middleware::Error::from)
+                })
+                .unwrap();
 
-                    let subscriptions = subscriptions_stream.collect::<Vec<_>>().await;
-                    let orb_subscription = convert_to_json(subscriptions);
-                    let mut rows = resp_to_rows(&obj, &orb_subscription, &self.tgt_cols[..]);
-                    result.append(&mut rows);
-                } else {
-                    warning!("unsupported object: {:#?}", obj);
-                    return;
-                }
-            });
+            let json: JsonValue = serde_json::from_str(&body).unwrap();
+            let mut rows = resp_to_rows(&obj, &json, columns);
+            result.append(&mut rows);
+
+            // get next page token, stop fetching if no more pages
+            next_page = json
+                .get("nextPageToken")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_owned());
 
             self.scan_result = Some(result);
         }
-        Ok(())
     }
 
-    fn iter_scan(&mut self, row: &mut Row) -> OrbFdwResult<Option<()>> {
+    fn iter_scan(&mut self, row: &mut Row) -> Option<()> {
         if let Some(ref mut result) = self.scan_result {
-            if self.iter_idx < result.len() {
-                row.replace_with(result[self.iter_idx].clone());
-                self.iter_idx += 1;
-                return Ok(Some(()));
+            if !result.is_empty() {
+                return result
+                    .drain(0..1)
+                    .last()
+                    .map(|src_row| row.replace_with(src_row));
             }
         }
-        Ok(None)
+        None
     }
 
-    fn end_scan(&mut self) -> OrbFdwResult<()> {
+    fn end_scan(&mut self) {
         self.scan_result.take();
-        Ok(())
     }
 
-    fn validator(options: Vec<Option<String>>, catalog: Option<pg_sys::Oid>) -> OrbFdwResult<()> {
+    fn validator(options: Vec<Option<String>>, catalog: Option<pg_sys::Oid>) {
         if let Some(oid) = catalog {
             if oid == FOREIGN_TABLE_RELATION_ID {
-                check_options_contain(&options, "object")?;
+                check_options_contain(&options, "object");
             }
         }
-
-        Ok(())
     }
 }
