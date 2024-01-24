@@ -16,12 +16,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 enum OrbFdwError {
-    #[error("column '{0}' data type is not supported")]
-    UnsupportedColumnType(String),
-
-    #[error("Stripe object '{0}' not implemented")]
-    ObjectNotImplemented(String),
-
     #[error("{0}")]
     OptionsError(#[from] OptionsError),
 
@@ -30,12 +24,6 @@ enum OrbFdwError {
 
     #[error("parse JSON response failed: {0}")]
     JsonParseError(#[from] serde_json::Error),
-
-    #[error("invalid response")]
-    InvalidResponse,
-
-    #[error("invalid stats: {0}")]
-    InvalidStats(String),
 }
 
 impl From<OrbFdwError> for ErrorReport {
@@ -129,7 +117,6 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                     ("name", "first_name", "string"),
                     ("email", "email", "string"),
                     ("payment_provider_id", "stripe_id", "string"),
-                    ("gender", "gender", "string"),
                     ("created_at", "created_at", "i64"),
                 ],
                 tgt_cols,
@@ -140,12 +127,11 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                 resp,
                 "data",
                 vec![
-                    ("id", "organization_id", "string"),
-                    ("name", "name", "string"),
-                    ("slug", "slug", "string"),
-                    ("created_at", "created_at", "i64"),
-                    ("updated_at", "updated_at", "i64"),
-                    ("created_by", "created_by", "string"),
+                    ("subscription_id", "subscription_id", "string"),
+                    ("status", "status", "string"),
+                    ("plan", "plan", "string"),
+                    ("started_date", "started_date", "i64"),
+                    ("end_date", "end_date", "i64"),
                 ],
                 tgt_cols,
             );
