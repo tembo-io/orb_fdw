@@ -184,9 +184,24 @@ impl OrbFdw {
         };
 
         match obj {
-            "customers" => format!("{}/customers?limit={}{}", base_url, Self::PAGE_SIZE, cursor_param),
-            "subscriptions" => format!("{}/subscriptions?limit={}{}", base_url, Self::PAGE_SIZE, cursor_param),
-            "invoices" => format!("{}/invoices?limit={}{}", base_url, Self::PAGE_SIZE, cursor_param),
+            "customers" => format!(
+                "{}/customers?limit={}{}",
+                base_url,
+                Self::PAGE_SIZE,
+                cursor_param
+            ),
+            "subscriptions" => format!(
+                "{}/subscriptions?limit={}{}",
+                base_url,
+                Self::PAGE_SIZE,
+                cursor_param
+            ),
+            "invoices" => format!(
+                "{}/invoices?limit={}{}",
+                base_url,
+                Self::PAGE_SIZE,
+                cursor_param
+            ),
             _ => {
                 warning!("unsupported object: {:#?}", obj);
                 "".to_string()
@@ -268,7 +283,11 @@ impl ForeignDataWrapper for OrbFdw {
                     break;
                 }
                 result.append(&mut rows.clone());
-                cursor = json.get("pagination_metadata").and_then(|pm| pm.get("next_cursor")).and_then(|nc| nc.as_str()).map(String::from);
+                cursor = json
+                    .get("pagination_metadata")
+                    .and_then(|pm| pm.get("next_cursor"))
+                    .and_then(|nc| nc.as_str())
+                    .map(String::from);
                 // Break if there is no next cursor
                 if cursor.is_none() {
                     break;
@@ -276,7 +295,6 @@ impl ForeignDataWrapper for OrbFdw {
             }
             self.scan_result = Some(result);
         }
-
     }
 
     fn iter_scan(&mut self, row: &mut Row) -> Option<()> {
