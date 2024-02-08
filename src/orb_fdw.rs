@@ -43,4 +43,4 @@ impl From<OrbFdwError> for ErrorReport {
     }
 }
 
-pub type OrbFdwResult<T> = Result<T, OrbFdwError>;
+pub type _OrbFdwResult<T> = Result<T, OrbFdwError>;

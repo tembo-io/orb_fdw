@@ -1,4 +1,3 @@
-use orb_billing::Subscription;
 use pgrx::warning;
 use pgrx::{pg_sys, prelude::*, JsonB};
 use serde_json::Value as JsonValue;
@@ -7,7 +6,7 @@ use std::env;
 use std::str::FromStr;
 use supabase_wrappers::prelude::*;
 use tokio::runtime::Runtime;
-pgrx::pg_module_magic!();
+pg_module_magic!();
 mod orb_fdw;
 use crate::orb_fdw::OrbFdwError;
 use reqwest::{self, header};
@@ -48,6 +47,21 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                         "string",
                     ),
                     ("current_billing_period_end_date", "end_date", "string"),
+                ],
+                tgt_cols,
+            );
+        }
+        "invoices" => {
+            result = body_to_rows(
+                resp,
+                "data",
+                vec![
+                    ("subscription.id", "subscription_id", "string"),
+                    ("customer.id", "customer_id", "string"),
+                    ("customer.external_customer_id", "organization_id", "string"),
+                    ("status", "status", "string"),
+                    ("due_date", "due_date", "string"),
+                    ("amount_due", "amount", "string")
                 ],
                 tgt_cols,
             );
@@ -158,19 +172,22 @@ impl OrbFdw {
     const DEFAULT_BASE_URL: &'static str = "https://api.withorb.com/v1";
     const DEFAULT_ROWS_LIMIT: usize = 10_000;
 
-    // TODO: will have to incorportate offset at some point
+    // TODO: will have to incorporate offset at some point
     const PAGE_SIZE: usize = 500;
 
-    fn build_url(&self, obj: &str, options: &HashMap<String, String>, offset: usize) -> String {
+    fn build_url(&self, obj: &str, _offset: usize) -> String {
+        let base_url = Self::DEFAULT_BASE_URL.to_owned();
         match obj {
             "customers" => {
-                let base_url = Self::DEFAULT_BASE_URL.to_owned();
                 let ret = format!("{}/customers?limit={}", base_url, Self::PAGE_SIZE);
                 ret
             }
             "subscriptions" => {
-                let base_url = Self::DEFAULT_BASE_URL.to_owned();
                 let ret = format!("{}/subscriptions?limit={}", base_url, Self::PAGE_SIZE);
+                ret
+            }
+            "invoices" => {
+                let ret = format!{"{}/invoices?limit={}", base_url, Self::PAGE_SIZE};
                 ret
             }
             _ => {
@@ -235,7 +252,7 @@ impl ForeignDataWrapper for OrbFdw {
         if let Some(client) = &self.client {
             let mut result = Vec::new();
 
-            let url = self.build_url(&obj, options, 0);
+            let url = self.build_url(&obj, 0);
 
             let body = self
                 .rt
