@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "orb_fdw"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "futures",
  "http",
