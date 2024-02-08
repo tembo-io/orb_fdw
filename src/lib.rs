@@ -173,7 +173,7 @@ impl OrbFdw {
     const DEFAULT_ROWS_LIMIT: usize = 10_000;
 
     // TODO: will have to incorporate offset at some point
-    const PAGE_SIZE: usize = 5;
+    const PAGE_SIZE: usize = 500;
 
     fn build_url(&self, obj: &str, cursor: Option<String>) -> String {
         let base_url = Self::DEFAULT_BASE_URL.to_owned();
