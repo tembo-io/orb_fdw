@@ -153,9 +153,9 @@ fn body_to_rows(
 }
 
 #[wrappers_fdw(
-    version = "0.0.2",
-    author = "Jay",
-    website = "https://github.com/",
+    version = "0.0.3",
+    author = "Jay Kothari",
+    website = "https://github.com/orb_fdw",
     error_type = "OrbFdwError"
 )]
 pub(crate) struct OrbFdw {
@@ -175,24 +175,36 @@ impl OrbFdw {
     // TODO: will have to incorporate offset at some point
     const PAGE_SIZE: usize = 500;
 
-    fn build_url(&self, obj: &str, _offset: usize) -> String {
+    fn build_url(&self, obj: &str, cursor: Option<String>) -> String {
         let base_url = Self::DEFAULT_BASE_URL.to_owned();
+        let cursor_param = if let Some(ref cur) = cursor {
+            format!("&cursor={}", cur)
+        } else {
+            String::new()
+        };
+
         match obj {
-            "customers" => {
-                let ret = format!("{}/customers?limit={}", base_url, Self::PAGE_SIZE);
-                ret
-            }
-            "subscriptions" => {
-                let ret = format!("{}/subscriptions?limit={}", base_url, Self::PAGE_SIZE);
-                ret
-            }
-            "invoices" => {
-                let ret = format! {"{}/invoices?limit={}", base_url, Self::PAGE_SIZE};
-                ret
-            }
+            "customers" => format!(
+                "{}/customers?limit={}{}",
+                base_url,
+                Self::PAGE_SIZE,
+                cursor_param
+            ),
+            "subscriptions" => format!(
+                "{}/subscriptions?limit={}{}",
+                base_url,
+                Self::PAGE_SIZE,
+                cursor_param
+            ),
+            "invoices" => format!(
+                "{}/invoices?limit={}{}",
+                base_url,
+                Self::PAGE_SIZE,
+                cursor_param
+            ),
             _ => {
                 warning!("unsupported object: {:#?}", obj);
-                return "".to_string();
+                "".to_string()
             }
         }
     }
@@ -251,23 +263,36 @@ impl ForeignDataWrapper for OrbFdw {
 
         if let Some(client) = &self.client {
             let mut result = Vec::new();
+            let mut cursor: Option<String> = None;
 
-            let url = self.build_url(&obj, 0);
+            loop {
+                let url = self.build_url(&obj, cursor.clone()); // Ensure build_url handles None as initial cursor
+                let body = self
+                    .rt
+                    .block_on(client.get(&url).send())
+                    .and_then(|resp| {
+                        resp.error_for_status()
+                            .and_then(|resp| self.rt.block_on(resp.text()))
+                            .map_err(reqwest_middleware::Error::from)
+                    })
+                    .unwrap();
 
-            let body = self
-                .rt
-                .block_on(client.get(&url).send())
-                .and_then(|resp| {
-                    resp.error_for_status()
-                        .and_then(|resp| self.rt.block_on(resp.text()))
-                        .map_err(reqwest_middleware::Error::from)
-                })
-                .unwrap();
-
-            let json: JsonValue = serde_json::from_str(&body).unwrap();
-            let mut rows = resp_to_rows(&obj, &json, columns);
-            result.append(&mut rows);
-
+                let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+                let rows = resp_to_rows(&obj, &json, columns); // Assuming this function exists and works as intended
+                if rows.is_empty() {
+                    break;
+                }
+                result.append(&mut rows.clone());
+                cursor = json
+                    .get("pagination_metadata")
+                    .and_then(|pm| pm.get("next_cursor"))
+                    .and_then(|nc| nc.as_str())
+                    .map(String::from);
+                // Break if there is no next cursor
+                if cursor.is_none() {
+                    break;
+                }
+            }
             self.scan_result = Some(result);
         }
     }
