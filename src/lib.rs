@@ -61,7 +61,7 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                     ("customer.external_customer_id", "organization_id", "string"),
                     ("status", "status", "string"),
                     ("due_date", "due_date", "string"),
-                    ("amount_due", "amount", "string")
+                    ("amount_due", "amount", "string"),
                 ],
                 tgt_cols,
             );
@@ -187,7 +187,7 @@ impl OrbFdw {
                 ret
             }
             "invoices" => {
-                let ret = format!{"{}/invoices?limit={}", base_url, Self::PAGE_SIZE};
+                let ret = format! {"{}/invoices?limit={}", base_url, Self::PAGE_SIZE};
                 ret
             }
             _ => {
