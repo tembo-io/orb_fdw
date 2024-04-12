@@ -17,7 +17,7 @@ create foreign data wrapper orb_wrapper
   validator orb_fdw_validator;
 ```
 
-Connect to clerk using your credentials:
+Connect to orb using your credentials:
 
 ``` sql
 create server my_orb_server
