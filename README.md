@@ -7,7 +7,7 @@ This is a simple open-source data wrapper that bridges the gap between your Post
 
 ### Pre-requisistes
 
-- have the v0.0.3 of `orb_fdw` extension enabled in your instance
+- have the v0.0.4 of `orb_fdw` extension enabled in your instance
 
 Create the foreign data wrapper:
 
