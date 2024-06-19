@@ -153,7 +153,7 @@ fn body_to_rows(
 }
 
 #[wrappers_fdw(
-    version = "0.0.4",
+    version = "0.11.3",
     author = "Jay Kothari",
     website = "https://github.com/orb_fdw",
     error_type = "OrbFdwError"
