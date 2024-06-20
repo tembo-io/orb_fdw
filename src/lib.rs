@@ -113,7 +113,7 @@ fn body_to_rows(
 
                 if *src_name == "email_addresses" {
                     current_value = current_value
-                        .and_then(|v| v.as_array().and_then(|arr| arr.get(0)))
+                        .and_then(|v| v.as_array().and_then(|arr| arr.first()))
                         .and_then(|first_obj| {
                             first_obj
                                 .as_object()
@@ -162,15 +162,11 @@ pub(crate) struct OrbFdw {
     rt: Runtime,
     client: Option<ClientWithMiddleware>,
     scan_result: Option<Vec<Row>>,
-    tgt_cols: Vec<Column>,
 }
 
 impl OrbFdw {
-    const FDW_NAME: &'static str = "OrbFdw";
     // convert response body text to rows
-
     const DEFAULT_BASE_URL: &'static str = "https://api.withorb.com/v1";
-    const DEFAULT_ROWS_LIMIT: usize = 10_000;
 
     // TODO: will have to incorporate offset at some point
     const PAGE_SIZE: usize = 500;
@@ -210,14 +206,14 @@ impl OrbFdw {
     }
 }
 
-impl ForeignDataWrapper for OrbFdw {
-    fn new(options: &HashMap<String, String>) -> Self {
+type OrbFdwResult<T> = Result<T, OrbFdwError>;
+impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
+    fn new(options: &HashMap<String, String>) -> OrbFdwResult<Self> {
         let token = if let Some(access_token) = options.get("api_key") {
             access_token.to_owned()
         } else {
             warning!("Cannot find api_key in options");
-            let access_token = env::var("ORB_API_KEY").unwrap();
-            access_token
+            env::var("ORB_API_KEY").unwrap()
         };
 
         let mut headers = header::HeaderMap::new();
@@ -236,14 +232,12 @@ impl ForeignDataWrapper for OrbFdw {
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
             .build();
 
-        let ret = Self {
-            rt: create_async_runtime(),
+        let rt = create_async_runtime().expect("failed to create async runtime");
+        Ok(Self {
+            rt,
             client: Some(client),
-            tgt_cols: Vec::new(),
             scan_result: None,
-        };
-
-        ret
+        })
     }
 
     fn begin_scan(
@@ -253,12 +247,8 @@ impl ForeignDataWrapper for OrbFdw {
         _sorts: &[Sort],
         _limit: &Option<Limit>,
         options: &HashMap<String, String>,
-    ) {
-        let obj = match require_option("object", options) {
-            Some(obj) => obj,
-            None => return,
-        };
-
+    ) -> OrbFdwResult<()> {
+        let obj = require_option("object", options).expect("invalid option");
         self.scan_result = None;
 
         if let Some(client) = &self.client {
@@ -266,7 +256,7 @@ impl ForeignDataWrapper for OrbFdw {
             let mut cursor: Option<String> = None;
 
             loop {
-                let url = self.build_url(&obj, cursor.clone()); // Ensure build_url handles None as initial cursor
+                let url = self.build_url(obj, cursor.clone()); // Ensure build_url handles None as initial cursor
                 let body = self
                     .rt
                     .block_on(client.get(&url).send())
@@ -278,7 +268,7 @@ impl ForeignDataWrapper for OrbFdw {
                     .unwrap();
 
                 let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-                let rows = resp_to_rows(&obj, &json, columns); // Assuming this function exists and works as intended
+                let rows = resp_to_rows(obj, &json, columns); // Assuming this function exists and works as intended
                 if rows.is_empty() {
                     break;
                 }
@@ -295,29 +285,33 @@ impl ForeignDataWrapper for OrbFdw {
             }
             self.scan_result = Some(result);
         }
+        Ok(())
     }
 
-    fn iter_scan(&mut self, row: &mut Row) -> Option<()> {
+    fn iter_scan(&mut self, row: &mut Row) -> OrbFdwResult<Option<()>> {
         if let Some(ref mut result) = self.scan_result {
             if !result.is_empty() {
-                return result
+                let scanned = result
                     .drain(0..1)
                     .last()
                     .map(|src_row| row.replace_with(src_row));
+                return Ok(scanned);
             }
         }
-        None
+        Ok(None)
     }
 
-    fn end_scan(&mut self) {
+    fn end_scan(&mut self) -> OrbFdwResult<()> {
         self.scan_result.take();
+        Ok(())
     }
 
-    fn validator(options: Vec<Option<String>>, catalog: Option<pg_sys::Oid>) {
+    fn validator(options: Vec<Option<String>>, catalog: Option<pg_sys::Oid>) -> OrbFdwResult<()> {
         if let Some(oid) = catalog {
             if oid == FOREIGN_TABLE_RELATION_ID {
-                check_options_contain(&options, "object");
+                let _ = check_options_contain(&options, "object");
             }
         }
+        Ok(())
     }
 }
