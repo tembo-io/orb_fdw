@@ -47,7 +47,7 @@ jobs:
   #   name: Run tests
   #   runs-on: ubuntu-22.04
   #   steps:
-  #     - uses: actions/checkout@v2
+  #     - uses: actions/checkout@v4
   #     - name: Install Rust stable toolchain
   #       uses: actions-rs/toolchain@v1
   #       with:
@@ -81,8 +81,11 @@ jobs:
     if: github.event_name == 'release'
     name: trunk publish
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        pg: [14, 15, 16]    
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Install Rust stable toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -103,7 +106,7 @@ jobs:
           cargo install pg-trunk
       - name: trunk build
         working-directory: ./
-        run: trunk build --pg-version 15
+        run: trunk build --pg-version ${{ matrix.pg }}
       - name: trunk publish
         working-directory: ./
         env:
