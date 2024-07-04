@@ -44,13 +44,9 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                 (
                     "current_billing_period_start_date",
                     "started_date",
-                    "timestamp_iso",
+                    "string",
                 ),
-                (
-                    "current_billing_period_end_date",
-                    "end_date",
-                    "timestamp_iso",
-                ),
+                ("current_billing_period_end_date", "end_date", "string"),
             ],
             tgt_cols,
         ),
@@ -212,6 +208,30 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
 
                     info!("Found {} customers in Orb", processed_customers.len());
                     serde_json::to_value(processed_customers).expect("failed deserializing users")
+                }
+                "subscriptions" => {
+                    let subscriptions_stream = self
+                        .client
+                        .list_subscriptions(&SubscriptionListParams::DEFAULT.page_size(400));
+                    let subscriptions = subscriptions_stream.collect::<Vec<_>>().await;
+
+                    let processed_subscriptions: Vec<OrbSubscription> = subscriptions
+                        .into_iter()
+                        .filter_map(|customer_result| match customer_result {
+                            Ok(customer) => Some(customer),
+                            Err(e) => {
+                                warning!("Error processing customer: {}", e);
+                                None
+                            }
+                        })
+                        .collect();
+
+                    info!(
+                        "Found {} subscriptions in Orb",
+                        processed_subscriptions.len()
+                    );
+                    serde_json::to_value(processed_subscriptions)
+                        .expect("failed deserializing users")
                 }
                 _ => {
                     warning!("unsupported object: {}", obj);
