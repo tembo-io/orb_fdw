@@ -155,48 +155,6 @@ pub(crate) struct OrbFdw {
     tgt_cols: Vec<Column>,
 }
 
-impl OrbFdw {
-    // convert response body text to rows
-    const DEFAULT_BASE_URL: &'static str = "https://api.withorb.com/v1";
-
-    // TODO: will have to incorporate offset at some point
-    const PAGE_SIZE: usize = 500;
-
-    fn build_url(&self, obj: &str, cursor: Option<String>) -> String {
-        let base_url = Self::DEFAULT_BASE_URL.to_owned();
-        let cursor_param = if let Some(ref cur) = cursor {
-            format!("&cursor={}", cur)
-        } else {
-            String::new()
-        };
-
-        match obj {
-            "customers" => format!(
-                "{}/customers?limit={}{}",
-                base_url,
-                Self::PAGE_SIZE,
-                cursor_param
-            ),
-            "subscriptions" => format!(
-                "{}/subscriptions?limit={}{}",
-                base_url,
-                Self::PAGE_SIZE,
-                cursor_param
-            ),
-            "invoices" => format!(
-                "{}/invoices?limit={}{}",
-                base_url,
-                Self::PAGE_SIZE,
-                cursor_param
-            ),
-            _ => {
-                warning!("unsupported object: {:#?}", obj);
-                "".to_string()
-            }
-        }
-    }
-}
-
 type OrbFdwResult<T> = Result<T, OrbFdwError>;
 impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
     fn new(options: &HashMap<String, String>) -> OrbFdwResult<Self> {
