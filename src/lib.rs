@@ -14,17 +14,14 @@ use orb_billing::{
     Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer, Error,
     ListParams, Subscription as OrbSubscription, SubscriptionListParams,
 };
-use reqwest::{self};
 
 // TODO: Remove all unwraps. Handle the errors
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
-    let mut result = Vec::new();
-
     match obj {
         "customers" => {
-            result = body_to_rows(
+            body_to_rows(
                 resp,
-                "data",
+                "data", // This might need to be an empty string if resp is directly an array
                 vec![
                     ("id", "user_id", "string"),
                     ("external_customer_id", "organization_id", "string"),
@@ -34,48 +31,47 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                     ("created_at", "created_at", "string"),
                 ],
                 tgt_cols,
-            );
+            )
         }
-        "subscriptions" => {
-            result = body_to_rows(
-                resp,
-                "data",
-                vec![
-                    ("id", "subscription_id", "string"),
-                    ("customer.external_customer_id", "organization_id", "string"),
-                    ("status", "status", "string"),
-                    ("plan.external_plan_id", "plan", "string"),
-                    (
-                        "current_billing_period_start_date",
-                        "started_date",
-                        "string",
-                    ),
-                    ("current_billing_period_end_date", "end_date", "string"),
-                ],
-                tgt_cols,
-            );
-        }
-        "invoices" => {
-            result = body_to_rows(
-                resp,
-                "data",
-                vec![
-                    ("subscription.id", "subscription_id", "string"),
-                    ("customer.id", "customer_id", "string"),
-                    ("customer.external_customer_id", "organization_id", "string"),
-                    ("status", "status", "string"),
-                    ("due_date", "due_date", "string"),
-                    ("amount_due", "amount", "string"),
-                ],
-                tgt_cols,
-            );
-        }
+        "subscriptions" => body_to_rows(
+            resp,
+            "data",
+            vec![
+                ("id", "subscription_id", "string"),
+                ("customer.external_customer_id", "organization_id", "string"),
+                ("status", "status", "string"),
+                ("plan.external_plan_id", "plan", "string"),
+                (
+                    "current_billing_period_start_date",
+                    "started_date",
+                    "timestamp_iso",
+                ),
+                (
+                    "current_billing_period_end_date",
+                    "end_date",
+                    "timestamp_iso",
+                ),
+            ],
+            tgt_cols,
+        ),
+        "invoices" => body_to_rows(
+            resp,
+            "data",
+            vec![
+                ("subscription.id", "subscription_id", "string"),
+                ("customer.id", "customer_id", "string"),
+                ("customer.external_customer_id", "organization_id", "string"),
+                ("status", "status", "string"),
+                ("due_date", "due_date", "timestamp_iso"),
+                ("amount_due", "amount", "string"),
+            ],
+            tgt_cols,
+        ),
         _ => {
             warning!("unsupported object: {}", obj);
+            Vec::new()
         }
     }
-
-    result
 }
 
 fn body_to_rows(
@@ -113,16 +109,6 @@ fn body_to_rows(
                 let mut current_value: Option<&JsonValue> = Some(obj);
                 for part in src_name.split('.') {
                     current_value = current_value.unwrap().as_object().unwrap().get(part);
-                }
-
-                if *src_name == "email_addresses" {
-                    current_value = current_value
-                        .and_then(|v| v.as_array().and_then(|arr| arr.first()))
-                        .and_then(|first_obj| {
-                            first_obj
-                                .as_object()
-                                .and_then(|obj| obj.get("email_address"))
-                        });
                 }
 
                 let cell = current_value.and_then(|v| match *col_type {
@@ -243,49 +229,43 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
     ) -> OrbFdwResult<()> {
         let obj = require_option("object", options).expect("invalid option");
         self.scan_result = None;
+        self.tgt_cols = columns.to_vec();
         let mut result = Vec::new();
 
-        let run = self.rt.block_on(async {
-            loop {
-                let obj_js = match obj {
-                    "customers" => {
-                        let customers_stream = self
-                            .client
-                            .list_customers(&ListParams::DEFAULT.page_size(400));
-                        let customers = customers_stream.collect::<Vec<_>>().await;
+        let run: Result<(), Box<dyn std::error::Error>> = self.rt.block_on(async {
+            let obj_js = match obj {
+                "customers" => {
+                    let customers_stream = self
+                        .client
+                        .list_customers(&ListParams::DEFAULT.page_size(400));
+                    let customers = customers_stream.collect::<Vec<_>>().await;
 
-                        // // Handle potential errors in the stream
-                        // let mut customers_vec = Vec::new();
-                        // for customer_result in customers {
-                        //     match customer_result {
-                        //         Ok(customers) => info!("it worked"),
-                        //         Err(e) => {
-                        //             error!("Error getting all orb customers: {}", e);
-                        //         }
-                        //     }
-                        // }
-                        // info!("Found {} customers in Orb", customers_vec.len());
-                        match customers {
-                            Ok(customers) => {
-                                serde_json::to_value(customers).expect("failed deserializing users")
-                            }
+                    // Process the Vec<Result<Customer, orb_billing::Error>>
+                    let processed_customers: Vec<OrbCustomer> = customers
+                        .into_iter()
+                        .filter_map(|customer_result| match customer_result {
+                            Ok(customer) => Some(customer),
                             Err(e) => {
-                                warning!("Failed to get users: {}", e);
-                                break;
+                                warning!("Error processing customer: {}", e);
+                                None
                             }
-                        }
-                    }
-                    _ => {
-                        warning!("unsupported object: {}", obj);
-                        break;
-                    }
-                };
+                        })
+                        .collect();
 
-                let mut rows = resp_to_rows(obj, &obj_js, &self.tgt_cols[..]);
-                result.append(&mut rows);
-            }
+                    info!("Found {} customers in Orb", processed_customers.len());
+                    serde_json::to_value(processed_customers).expect("failed deserializing users")
+                }
+                _ => {
+                    warning!("unsupported object: {}", obj);
+                    return Ok(());
+                }
+            };
+
+            let mut rows = resp_to_rows(obj, &obj_js, &self.tgt_cols[..]);
+            result.append(&mut rows);
             Ok(())
         });
+
         run.expect("failed to run async block");
         self.scan_result = Some(result);
         Ok(())
