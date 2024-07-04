@@ -11,7 +11,7 @@ mod orb_fdw;
 use crate::orb_fdw::OrbFdwError;
 use futures::StreamExt;
 use orb_billing::{
-    Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer, Error,
+    Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer,
     Invoice as OrbInvoice, InvoiceListParams, ListParams, Subscription as OrbSubscription,
     SubscriptionListParams,
 };
