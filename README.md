@@ -42,7 +42,7 @@ create foreign table orb_customers (
   first_name text,
   email text,
   stripe_id text,
-  created_at text,
+  created_at timestamp,
   attrs jsonb
   )
   server my_orb_server
