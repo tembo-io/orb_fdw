@@ -10,7 +10,7 @@ and [Orb](https://www.withorb.com/) a leading usage-based billing solution.
 
 ### Pre-requisistes
 
-- have the v0.12.0 of `orb_fdw` extension enabled in your instance
+- have the v0.12.1 of `orb_fdw` extension enabled in your instance
 
 Create the foreign data wrapper:
 
