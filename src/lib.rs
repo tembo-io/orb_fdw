@@ -12,7 +12,8 @@ use crate::orb_fdw::OrbFdwError;
 use futures::StreamExt;
 use orb_billing::{
     Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer, Error,
-    ListParams, Subscription as OrbSubscription, SubscriptionListParams,
+    Invoice as OrbInvoice, InvoiceListParams, ListParams, Subscription as OrbSubscription,
+    SubscriptionListParams,
 };
 
 // TODO: Remove all unwraps. Handle the errors
@@ -28,7 +29,7 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                     ("name", "first_name", "string"),
                     ("email", "email", "string"),
                     ("payment_provider_id", "stripe_id", "string"),
-                    ("created_at", "created_at", "string"),
+                    ("created_at", "created_at", "timestamp_iso"),
                 ],
                 tgt_cols,
             )
@@ -44,9 +45,13 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                 (
                     "current_billing_period_start_date",
                     "started_date",
-                    "string",
+                    "timestamp_iso",
                 ),
-                ("current_billing_period_end_date", "end_date", "string"),
+                (
+                    "current_billing_period_end_date",
+                    "end_date",
+                    "timestamp_iso",
+                ),
             ],
             tgt_cols,
         ),
@@ -58,7 +63,7 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
                 ("customer.id", "customer_id", "string"),
                 ("customer.external_customer_id", "organization_id", "string"),
                 ("status", "status", "string"),
-                ("due_date", "due_date", "timestamp_iso"),
+                ("invoice_date", "due_date", "timestamp_iso"),
                 ("amount_due", "amount", "string"),
             ],
             tgt_cols,
@@ -232,6 +237,26 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
                     );
                     serde_json::to_value(processed_subscriptions)
                         .expect("failed deserializing users")
+                }
+                "invoices" => {
+                    let invoices_stream = self
+                        .client
+                        .list_invoices(&InvoiceListParams::DEFAULT.page_size(400));
+                    let invoices = invoices_stream.collect::<Vec<_>>().await;
+
+                    let processed_invoices: Vec<OrbInvoice> = invoices
+                        .into_iter()
+                        .filter_map(|customer_result| match customer_result {
+                            Ok(customer) => Some(customer),
+                            Err(e) => {
+                                warning!("Error processing customer: {}", e);
+                                None
+                            }
+                        })
+                        .collect();
+
+                    info!("Found {} subscriptions in Orb", processed_invoices.len());
+                    serde_json::to_value(processed_invoices).expect("failed deserializing users")
                 }
                 _ => {
                     warning!("unsupported object: {}", obj);

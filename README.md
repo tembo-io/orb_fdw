@@ -1,6 +1,7 @@
 ## Orb_fdw
 
-This is a simple open-source data wrapper that bridges the gap between your Postgres database and [Orb](https://www.withorb.com/) a leading usage-based billing solution.
+This is a simple open-source data wrapper that bridges the gap between your Postgres database
+and [Orb](https://www.withorb.com/) a leading usage-based billing solution.
 
 [![Tembo Cloud Try Free](https://tembo.io/tryFreeButton.svg)](https://cloud.tembo.io/sign-up)
 
@@ -41,7 +42,8 @@ create foreign table orb_customers (
   first_name text,
   email text,
   stripe_id text,
-  created_at text
+  created_at text,
+  attrs jsonb
   )
   server my_orb_server
   options (
@@ -59,8 +61,9 @@ create foreign table orb_subscriptions (
     organization_id text,
     status text,
     plan text,
-    started_date text,
-    end_date text
+    started_date timestamp,
+    end_date timestamp,
+    attrs jsonb
   )
   server my_orb_server
   options (
@@ -78,8 +81,9 @@ create foreign table orb_invoices (
     subscription_id text,
     organization_id text,
     status text,
-    due_date text,
-    amount text
+    due_date timestamp,
+    amount text,
+    attrs jsonb
   )
   server my_orb_server
   options (
