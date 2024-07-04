@@ -1549,9 +1549,9 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orb-billing"
-version = "0.9.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd0cad922f916817f5b02158bf446258b3e185c272147c356b03a79383fa771b"
+checksum = "500b1c4e0a8b0cc4c72da97853846c4c4fc4a384d49090605daea9c1cd0ec883"
 dependencies = [
  "async-stream",
  "codes-iso-3166",
@@ -1575,6 +1575,7 @@ name = "orb_fdw"
 version = "0.12.0"
 dependencies = [
  "futures",
+ "futures-util",
  "http",
  "orb-billing",
  "pgrx",

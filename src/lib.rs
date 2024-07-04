@@ -9,10 +9,14 @@ use tokio::runtime::Runtime;
 pg_module_magic!();
 mod orb_fdw;
 use crate::orb_fdw::OrbFdwError;
-use reqwest::{self, header};
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use futures::StreamExt;
+use orb_billing::{
+    Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer, Error,
+    ListParams, Subscription as OrbSubscription, SubscriptionListParams,
+};
+use reqwest::{self};
 
+// TODO: Remove all unwraps. Handle the errors
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
     let mut result = Vec::new();
 
@@ -160,8 +164,9 @@ fn body_to_rows(
 )]
 pub(crate) struct OrbFdw {
     rt: Runtime,
-    client: Option<ClientWithMiddleware>,
+    client: OrbClient,
     scan_result: Option<Vec<Row>>,
+    tgt_cols: Vec<Column>,
 }
 
 impl OrbFdw {
@@ -215,28 +220,16 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
             warning!("Cannot find api_key in options");
             env::var("ORB_API_KEY").unwrap()
         };
-
-        let mut headers = header::HeaderMap::new();
-        let value = format!("Bearer {}", token);
-        let mut auth_value = header::HeaderValue::from_str(&value)
-            .map_err(|_| OrbFdwError::InvalidApiKeyHeader)
-            .unwrap();
-        auth_value.set_sensitive(true);
-        headers.insert(header::AUTHORIZATION, auth_value);
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .unwrap();
-        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
-        let client = ClientBuilder::new(client)
-            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-            .build();
-
+        let client_config = OrbClientConfig {
+            api_key: token.to_string(),
+        };
+        let orb_client = OrbClient::new(client_config);
         let rt = create_async_runtime().expect("failed to create async runtime");
         Ok(Self {
             rt,
-            client: Some(client),
+            client: orb_client,
             scan_result: None,
+            tgt_cols: Vec::new(),
         })
     }
 
@@ -250,41 +243,51 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
     ) -> OrbFdwResult<()> {
         let obj = require_option("object", options).expect("invalid option");
         self.scan_result = None;
+        let mut result = Vec::new();
 
-        if let Some(client) = &self.client {
-            let mut result = Vec::new();
-            let mut cursor: Option<String> = None;
-
+        let run = self.rt.block_on(async {
             loop {
-                let url = self.build_url(obj, cursor.clone()); // Ensure build_url handles None as initial cursor
-                let body = self
-                    .rt
-                    .block_on(client.get(&url).send())
-                    .and_then(|resp| {
-                        resp.error_for_status()
-                            .and_then(|resp| self.rt.block_on(resp.text()))
-                            .map_err(reqwest_middleware::Error::from)
-                    })
-                    .unwrap();
+                let obj_js = match obj {
+                    "customers" => {
+                        let customers_stream = self
+                            .client
+                            .list_customers(&ListParams::DEFAULT.page_size(400));
+                        let customers = customers_stream.collect::<Vec<_>>().await;
 
-                let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-                let rows = resp_to_rows(obj, &json, columns); // Assuming this function exists and works as intended
-                if rows.is_empty() {
-                    break;
-                }
-                result.append(&mut rows.clone());
-                cursor = json
-                    .get("pagination_metadata")
-                    .and_then(|pm| pm.get("next_cursor"))
-                    .and_then(|nc| nc.as_str())
-                    .map(String::from);
-                // Break if there is no next cursor
-                if cursor.is_none() {
-                    break;
-                }
+                        // // Handle potential errors in the stream
+                        // let mut customers_vec = Vec::new();
+                        // for customer_result in customers {
+                        //     match customer_result {
+                        //         Ok(customers) => info!("it worked"),
+                        //         Err(e) => {
+                        //             error!("Error getting all orb customers: {}", e);
+                        //         }
+                        //     }
+                        // }
+                        // info!("Found {} customers in Orb", customers_vec.len());
+                        match customers {
+                            Ok(customers) => {
+                                serde_json::to_value(customers).expect("failed deserializing users")
+                            }
+                            Err(e) => {
+                                warning!("Failed to get users: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    _ => {
+                        warning!("unsupported object: {}", obj);
+                        break;
+                    }
+                };
+
+                let mut rows = resp_to_rows(obj, &obj_js, &self.tgt_cols[..]);
+                result.append(&mut rows);
             }
-            self.scan_result = Some(result);
-        }
+            Ok(())
+        });
+        run.expect("failed to run async block");
+        self.scan_result = Some(result);
         Ok(())
     }
 

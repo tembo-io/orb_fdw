@@ -17,7 +17,7 @@ pg_test = []
 [dependencies]
 reqwest-retry = "0.2.2"
 pgrx = "=0.11.3"
-orb-billing = "0.9.0"
+orb-billing = "0.11.0"
 # supabase-wrappers = "=0.1.18"
 supabase-wrappers = { git = "https://github.com/supabase/wrappers.git", default-features = false, rev = "99242d70eb7e551b700e2db31cc618850d835bc2" }
 tokio = { version = "1", features = ["full"] }
@@ -29,6 +29,7 @@ http = "0.2.4"
 reqwest = { version = "0.11.4", features = ["json"] }
 reqwest-middleware = "0.2.4"
 url = "2.2.2"
+futures-util = "0.3.30"
 
 [dev-dependencies]
 pgrx-tests = "=0.11.3"
