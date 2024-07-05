@@ -1358,16 +1358,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1564,8 +1554,6 @@ dependencies = [
  "orb-billing",
  "pgrx",
  "pgrx-tests",
- "reqwest",
- "reqwest-middleware",
  "serde_json",
  "supabase-wrappers",
  "thiserror",
@@ -2274,7 +2262,6 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
- "mime_guess",
  "native-tls",
  "once_cell",
  "percent-encoding",
@@ -2293,21 +2280,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winreg",
-]
-
-[[package]]
-name = "reqwest-middleware"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a735987236a8e238bf0296c7e351b999c188ccc11477f311b82b55c93984216"
-dependencies = [
- "anyhow",
- "async-trait",
- "http",
- "reqwest",
- "serde",
- "task-local-extensions",
- "thiserror",
 ]
 
 [[package]]
@@ -2735,7 +2707,8 @@ checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
 [[package]]
 name = "supabase-wrappers"
 version = "0.1.18"
-source = "git+https://github.com/supabase/wrappers.git?rev=99242d70eb7e551b700e2db31cc618850d835bc2#99242d70eb7e551b700e2db31cc618850d835bc2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9bf99aa26691813b950feeb6d40f3570bebb4a24b1a2cf387be250d7dadefdf"
 dependencies = [
  "pgrx",
  "supabase-wrappers-macros",
@@ -2747,7 +2720,8 @@ dependencies = [
 [[package]]
 name = "supabase-wrappers-macros"
 version = "0.1.16"
-source = "git+https://github.com/supabase/wrappers.git?rev=99242d70eb7e551b700e2db31cc618850d835bc2#99242d70eb7e551b700e2db31cc618850d835bc2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fd5531b513912a65d64b6dfd2effcdece61b4fde911658e847f522b4bb56a24"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2823,15 +2797,6 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
-
-[[package]]
-name = "task-local-extensions"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba323866e5d033818e3240feeb9f7db2c4296674e4d9e16b97b7bf8f490434e8"
-dependencies = [
- "pin-utils",
-]
 
 [[package]]
 name = "tempfile"
@@ -3179,15 +3144,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96bd2f2237fe450fcd0a1d2f5f4e91711124f7857ba2e964247776ebeeb7b0c4"
 dependencies = [
  "unic-common",
-]
-
-[[package]]
-name = "unicase"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7d2d4dafb69621809a81864c9c1b864479e1235c0dd4e199924b9742439ed89"
-dependencies = [
- "version_check",
 ]
 
 [[package]]
