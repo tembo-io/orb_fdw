@@ -9,69 +9,70 @@ use tokio::runtime::Runtime;
 pg_module_magic!();
 mod orb_fdw;
 use crate::orb_fdw::OrbFdwError;
-use reqwest::{self, header};
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use futures::StreamExt;
+use orb_billing::{
+    Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer,
+    Invoice as OrbInvoice, InvoiceListParams, ListParams, Subscription as OrbSubscription,
+    SubscriptionListParams,
+};
 
+// TODO: Remove all unwraps. Handle the errors
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
-    let mut result = Vec::new();
-
     match obj {
         "customers" => {
-            result = body_to_rows(
+            body_to_rows(
                 resp,
-                "data",
+                "data", // This might need to be an empty string if resp is directly an array
                 vec![
                     ("id", "user_id", "string"),
                     ("external_customer_id", "organization_id", "string"),
                     ("name", "first_name", "string"),
                     ("email", "email", "string"),
                     ("payment_provider_id", "stripe_id", "string"),
-                    ("created_at", "created_at", "string"),
+                    ("created_at", "created_at", "timestamp_iso"),
                 ],
                 tgt_cols,
-            );
+            )
         }
-        "subscriptions" => {
-            result = body_to_rows(
-                resp,
-                "data",
-                vec![
-                    ("id", "subscription_id", "string"),
-                    ("customer.external_customer_id", "organization_id", "string"),
-                    ("status", "status", "string"),
-                    ("plan.external_plan_id", "plan", "string"),
-                    (
-                        "current_billing_period_start_date",
-                        "started_date",
-                        "string",
-                    ),
-                    ("current_billing_period_end_date", "end_date", "string"),
-                ],
-                tgt_cols,
-            );
-        }
-        "invoices" => {
-            result = body_to_rows(
-                resp,
-                "data",
-                vec![
-                    ("subscription.id", "subscription_id", "string"),
-                    ("customer.id", "customer_id", "string"),
-                    ("customer.external_customer_id", "organization_id", "string"),
-                    ("status", "status", "string"),
-                    ("due_date", "due_date", "string"),
-                    ("amount_due", "amount", "string"),
-                ],
-                tgt_cols,
-            );
-        }
+        "subscriptions" => body_to_rows(
+            resp,
+            "data",
+            vec![
+                ("id", "subscription_id", "string"),
+                ("customer.external_customer_id", "organization_id", "string"),
+                ("status", "status", "string"),
+                ("plan.external_plan_id", "plan", "string"),
+                (
+                    "current_billing_period_start_date",
+                    "started_date",
+                    "timestamp_iso",
+                ),
+                (
+                    "current_billing_period_end_date",
+                    "end_date",
+                    "timestamp_iso",
+                ),
+            ],
+            tgt_cols,
+        ),
+        "invoices" => body_to_rows(
+            resp,
+            "data",
+            vec![
+                ("subscription.id", "subscription_id", "string"),
+                ("customer.id", "customer_id", "string"),
+                ("customer.external_customer_id", "organization_id", "string"),
+                ("status", "status", "string"),
+                ("invoice_date", "due_date", "timestamp_iso"),
+                ("amount_due", "amount", "string"),
+            ],
+            tgt_cols,
+        ),
         _ => {
             warning!("unsupported object: {}", obj);
+            Vec::new()
         }
     }
-
-    result
 }
 
 fn body_to_rows(
@@ -111,16 +112,6 @@ fn body_to_rows(
                     current_value = current_value.unwrap().as_object().unwrap().get(part);
                 }
 
-                if *src_name == "email_addresses" {
-                    current_value = current_value
-                        .and_then(|v| v.as_array().and_then(|arr| arr.first()))
-                        .and_then(|first_obj| {
-                            first_obj
-                                .as_object()
-                                .and_then(|obj| obj.get("email_address"))
-                        });
-                }
-
                 let cell = current_value.and_then(|v| match *col_type {
                     "bool" => v.as_bool().map(Cell::Bool),
                     "i64" => v.as_i64().map(Cell::I64),
@@ -153,57 +144,16 @@ fn body_to_rows(
 }
 
 #[wrappers_fdw(
-    version = "0.12.0",
+    version = "0.12.1",
     author = "Jay Kothari",
     website = "https://github.com/orb_fdw",
     error_type = "OrbFdwError"
 )]
 pub(crate) struct OrbFdw {
     rt: Runtime,
-    client: Option<ClientWithMiddleware>,
+    client: OrbClient,
     scan_result: Option<Vec<Row>>,
-}
-
-impl OrbFdw {
-    // convert response body text to rows
-    const DEFAULT_BASE_URL: &'static str = "https://api.withorb.com/v1";
-
-    // TODO: will have to incorporate offset at some point
-    const PAGE_SIZE: usize = 500;
-
-    fn build_url(&self, obj: &str, cursor: Option<String>) -> String {
-        let base_url = Self::DEFAULT_BASE_URL.to_owned();
-        let cursor_param = if let Some(ref cur) = cursor {
-            format!("&cursor={}", cur)
-        } else {
-            String::new()
-        };
-
-        match obj {
-            "customers" => format!(
-                "{}/customers?limit={}{}",
-                base_url,
-                Self::PAGE_SIZE,
-                cursor_param
-            ),
-            "subscriptions" => format!(
-                "{}/subscriptions?limit={}{}",
-                base_url,
-                Self::PAGE_SIZE,
-                cursor_param
-            ),
-            "invoices" => format!(
-                "{}/invoices?limit={}{}",
-                base_url,
-                Self::PAGE_SIZE,
-                cursor_param
-            ),
-            _ => {
-                warning!("unsupported object: {:#?}", obj);
-                "".to_string()
-            }
-        }
-    }
+    tgt_cols: Vec<Column>,
 }
 
 type OrbFdwResult<T> = Result<T, OrbFdwError>;
@@ -215,28 +165,16 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
             warning!("Cannot find api_key in options");
             env::var("ORB_API_KEY").unwrap()
         };
-
-        let mut headers = header::HeaderMap::new();
-        let value = format!("Bearer {}", token);
-        let mut auth_value = header::HeaderValue::from_str(&value)
-            .map_err(|_| OrbFdwError::InvalidApiKeyHeader)
-            .unwrap();
-        auth_value.set_sensitive(true);
-        headers.insert(header::AUTHORIZATION, auth_value);
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .unwrap();
-        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
-        let client = ClientBuilder::new(client)
-            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-            .build();
-
+        let client_config = OrbClientConfig {
+            api_key: token.to_string(),
+        };
+        let orb_client = OrbClient::new(client_config);
         let rt = create_async_runtime().expect("failed to create async runtime");
         Ok(Self {
             rt,
-            client: Some(client),
+            client: orb_client,
             scan_result: None,
+            tgt_cols: Vec::new(),
         })
     }
 
@@ -250,41 +188,89 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
     ) -> OrbFdwResult<()> {
         let obj = require_option("object", options).expect("invalid option");
         self.scan_result = None;
+        self.tgt_cols = columns.to_vec();
+        let mut result = Vec::new();
 
-        if let Some(client) = &self.client {
-            let mut result = Vec::new();
-            let mut cursor: Option<String> = None;
+        let run: Result<(), Box<dyn std::error::Error>> = self.rt.block_on(async {
+            let obj_js = match obj {
+                "customers" => {
+                    let customers_stream = self
+                        .client
+                        .list_customers(&ListParams::DEFAULT.page_size(400));
+                    let customers = customers_stream.collect::<Vec<_>>().await;
 
-            loop {
-                let url = self.build_url(obj, cursor.clone()); // Ensure build_url handles None as initial cursor
-                let body = self
-                    .rt
-                    .block_on(client.get(&url).send())
-                    .and_then(|resp| {
-                        resp.error_for_status()
-                            .and_then(|resp| self.rt.block_on(resp.text()))
-                            .map_err(reqwest_middleware::Error::from)
-                    })
-                    .unwrap();
+                    // Process the Vec<Result<Customer, orb_billing::Error>>
+                    let processed_customers: Vec<OrbCustomer> = customers
+                        .into_iter()
+                        .filter_map(|customer_result| match customer_result {
+                            Ok(customer) => Some(customer),
+                            Err(e) => {
+                                warning!("Error processing customer: {}", e);
+                                None
+                            }
+                        })
+                        .collect();
 
-                let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-                let rows = resp_to_rows(obj, &json, columns); // Assuming this function exists and works as intended
-                if rows.is_empty() {
-                    break;
+                    info!("Found {} customers in Orb", processed_customers.len());
+                    serde_json::to_value(processed_customers).expect("failed deserializing users")
                 }
-                result.append(&mut rows.clone());
-                cursor = json
-                    .get("pagination_metadata")
-                    .and_then(|pm| pm.get("next_cursor"))
-                    .and_then(|nc| nc.as_str())
-                    .map(String::from);
-                // Break if there is no next cursor
-                if cursor.is_none() {
-                    break;
+                "subscriptions" => {
+                    let subscriptions_stream = self
+                        .client
+                        .list_subscriptions(&SubscriptionListParams::DEFAULT.page_size(400));
+                    let subscriptions = subscriptions_stream.collect::<Vec<_>>().await;
+
+                    let processed_subscriptions: Vec<OrbSubscription> = subscriptions
+                        .into_iter()
+                        .filter_map(|customer_result| match customer_result {
+                            Ok(customer) => Some(customer),
+                            Err(e) => {
+                                warning!("Error processing customer: {}", e);
+                                None
+                            }
+                        })
+                        .collect();
+
+                    info!(
+                        "Found {} subscriptions in Orb",
+                        processed_subscriptions.len()
+                    );
+                    serde_json::to_value(processed_subscriptions)
+                        .expect("failed deserializing users")
                 }
-            }
-            self.scan_result = Some(result);
-        }
+                "invoices" => {
+                    let invoices_stream = self
+                        .client
+                        .list_invoices(&InvoiceListParams::DEFAULT.page_size(400));
+                    let invoices = invoices_stream.collect::<Vec<_>>().await;
+
+                    let processed_invoices: Vec<OrbInvoice> = invoices
+                        .into_iter()
+                        .filter_map(|customer_result| match customer_result {
+                            Ok(customer) => Some(customer),
+                            Err(e) => {
+                                warning!("Error processing customer: {}", e);
+                                None
+                            }
+                        })
+                        .collect();
+
+                    info!("Found {} subscriptions in Orb", processed_invoices.len());
+                    serde_json::to_value(processed_invoices).expect("failed deserializing users")
+                }
+                _ => {
+                    warning!("unsupported object: {}", obj);
+                    return Ok(());
+                }
+            };
+
+            let mut rows = resp_to_rows(obj, &obj_js, &self.tgt_cols[..]);
+            result.append(&mut rows);
+            Ok(())
+        });
+
+        run.expect("failed to run async block");
+        self.scan_result = Some(result);
         Ok(())
     }
 
