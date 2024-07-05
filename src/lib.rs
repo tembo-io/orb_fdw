@@ -1,14 +1,11 @@
-use pgrx::warning;
-use pgrx::{pg_sys, prelude::*, JsonB};
+use pgrx::{pg_sys, prelude::*, warning, JsonB};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
-use std::env;
-use std::str::FromStr;
+use std::{collections::HashMap, env, str::FromStr};
 use supabase_wrappers::prelude::*;
 use tokio::runtime::Runtime;
 pg_module_magic!();
 mod orb_fdw;
-use crate::orb_fdw::OrbFdwError;
+use crate::orb_fdw::{OrbFdwError, OrbFdwResult};
 use futures::StreamExt;
 use orb_billing::{
     Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer,
@@ -16,24 +13,21 @@ use orb_billing::{
     SubscriptionListParams,
 };
 
-// TODO: Remove all unwraps. Handle the errors
-fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
+fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> OrbFdwResult<Vec<Row>> {
     match obj {
-        "customers" => {
-            body_to_rows(
-                resp,
-                "data", // This might need to be an empty string if resp is directly an array
-                vec![
-                    ("id", "user_id", "string"),
-                    ("external_customer_id", "organization_id", "string"),
-                    ("name", "first_name", "string"),
-                    ("email", "email", "string"),
-                    ("payment_provider_id", "stripe_id", "string"),
-                    ("created_at", "created_at", "timestamp_iso"),
-                ],
-                tgt_cols,
-            )
-        }
+        "customers" => body_to_rows(
+            resp,
+            "data",
+            vec![
+                ("id", "user_id", "string"),
+                ("external_customer_id", "organization_id", "string"),
+                ("name", "first_name", "string"),
+                ("email", "email", "string"),
+                ("payment_provider_id", "stripe_id", "string"),
+                ("created_at", "created_at", "timestamp_iso"),
+            ],
+            tgt_cols,
+        ),
         "subscriptions" => body_to_rows(
             resp,
             "data",
@@ -69,8 +63,7 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
             tgt_cols,
         ),
         _ => {
-            warning!("unsupported object: {}", obj);
-            Vec::new()
+            error!("{}", OrbFdwError::ObjectNotImplemented(obj.to_string()))
         }
     }
 }
@@ -80,21 +73,22 @@ fn body_to_rows(
     obj_key: &str,
     normal_cols: Vec<(&str, &str, &str)>,
     tgt_cols: &[Column],
-) -> Vec<Row> {
+) -> OrbFdwResult<Vec<Row>> {
     let mut result = Vec::new();
 
     let objs = if resp.is_array() {
-        // If `resp` is directly an array
-        resp.as_array().unwrap()
+        match resp.as_array() {
+            Some(value) => value,
+            None => return Ok(result),
+        }
     } else {
-        // If `resp` is an object containing the array under `obj_key`
         match resp
             .as_object()
             .and_then(|v| v.get(obj_key))
             .and_then(|v| v.as_array())
         {
             Some(objs) => objs,
-            None => return result,
+            None => return Ok(result),
         }
     };
 
@@ -116,15 +110,21 @@ fn body_to_rows(
                     "bool" => v.as_bool().map(Cell::Bool),
                     "i64" => v.as_i64().map(Cell::I64),
                     "string" => v.as_str().map(|a| Cell::String(a.to_owned())),
-                    "timestamp" => v.as_str().map(|a| {
-                        let secs = a.parse::<i64>().unwrap() / 1000;
-                        let ts = to_timestamp(secs as f64);
-                        Cell::Timestamp(ts.to_utc())
-                    }),
-                    "timestamp_iso" => v.as_str().map(|a| {
-                        let ts = Timestamp::from_str(a).unwrap();
-                        Cell::Timestamp(ts)
-                    }),
+                    "timestamp" => Some(
+                        v.as_str()
+                            .and_then(|a| a.parse::<i64>().ok())
+                            .map(|ms| to_timestamp(ms as f64 / 1000.0).to_utc())
+                            .map(Cell::Timestamp)
+                            .ok_or(OrbFdwError::InvalidTimestampFormat(v.to_string()))
+                            .ok()?,
+                    ),
+                    "timestamp_iso" => Some(
+                        v.as_str()
+                            .and_then(|a| Timestamp::from_str(a).ok())
+                            .map(Cell::Timestamp)
+                            .ok_or(OrbFdwError::InvalidTimestampFormat(v.to_string()))
+                            .ok()?,
+                    ),
                     "json" => Some(Cell::Json(JsonB(v.clone()))),
                     _ => None,
                 });
@@ -134,13 +134,25 @@ fn body_to_rows(
 
         // put all properties into 'attrs' JSON column
         if tgt_cols.iter().any(|c| &c.name == "attrs") {
-            let attrs = serde_json::from_str(&obj.to_string()).unwrap();
+            let attrs = serde_json::from_str(&obj.to_string())?;
             row.push("attrs", Some(Cell::Json(JsonB(attrs))));
         }
 
         result.push(row);
     }
-    result
+    Ok(result)
+}
+
+fn process_data<T, E: std::fmt::Display>(data: Vec<Result<T, E>>) -> Vec<T> {
+    data.into_iter()
+        .filter_map(|item_result| match item_result {
+            Ok(item) => Some(item),
+            Err(e) => {
+                warning!("Error processing item: {}", e);
+                None
+            }
+        })
+        .collect()
 }
 
 #[wrappers_fdw(
@@ -156,20 +168,27 @@ pub(crate) struct OrbFdw {
     tgt_cols: Vec<Column>,
 }
 
-type OrbFdwResult<T> = Result<T, OrbFdwError>;
 impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
     fn new(options: &HashMap<String, String>) -> OrbFdwResult<Self> {
         let token = if let Some(access_token) = options.get("api_key") {
             access_token.to_owned()
         } else {
-            warning!("Cannot find api_key in options");
-            env::var("ORB_API_KEY").unwrap()
+            warning!("Cannot find api_key in options; trying environment variable");
+            match env::var("ORB_API_KEY") {
+                Ok(key) => key,
+                Err(_) => {
+                    error!("{}", OrbFdwError::ApiKeyNotFound);
+                }
+            }
         };
-        let client_config = OrbClientConfig {
-            api_key: token.to_string(),
-        };
+        let client_config = OrbClientConfig { api_key: token };
         let orb_client = OrbClient::new(client_config);
-        let rt = create_async_runtime().expect("failed to create async runtime");
+        let rt = match create_async_runtime() {
+            Ok(runtime) => runtime,
+            Err(e) => {
+                error!("Failed to create async runtime: {}", e);
+            }
+        };
         Ok(Self {
             rt,
             client: orb_client,
@@ -186,7 +205,13 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
         _limit: &Option<Limit>,
         options: &HashMap<String, String>,
     ) -> OrbFdwResult<()> {
-        let obj = require_option("object", options).expect("invalid option");
+        let obj = match require_option("object", options) {
+            Ok(object) => object,
+            Err(_e) => error!(
+                "{}",
+                OrbFdwError::MissingRequiredOption("object".to_string())
+            ),
+        };
         self.scan_result = None;
         self.tgt_cols = columns.to_vec();
         let mut result = Vec::new();
@@ -196,67 +221,38 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
                 "customers" => {
                     let customers_stream = self
                         .client
-                        .list_customers(&ListParams::DEFAULT.page_size(400));
+                        .list_customers(&ListParams::DEFAULT.page_size(500));
                     let customers = customers_stream.collect::<Vec<_>>().await;
+                    let processed_customers: Vec<OrbCustomer> = process_data(customers);
 
-                    // Process the Vec<Result<Customer, orb_billing::Error>>
-                    let processed_customers: Vec<OrbCustomer> = customers
-                        .into_iter()
-                        .filter_map(|customer_result| match customer_result {
-                            Ok(customer) => Some(customer),
-                            Err(e) => {
-                                warning!("Error processing customer: {}", e);
-                                None
-                            }
-                        })
-                        .collect();
-
-                    info!("Found {} customers in Orb", processed_customers.len());
-                    serde_json::to_value(processed_customers).expect("failed deserializing users")
+                    match serde_json::to_value(processed_customers) {
+                        Ok(value) => value,
+                        Err(e) => error!("{}", OrbFdwError::JsonSerializationError(e)),
+                    }
                 }
                 "subscriptions" => {
                     let subscriptions_stream = self
                         .client
-                        .list_subscriptions(&SubscriptionListParams::DEFAULT.page_size(400));
+                        .list_subscriptions(&SubscriptionListParams::DEFAULT.page_size(500));
                     let subscriptions = subscriptions_stream.collect::<Vec<_>>().await;
+                    let processed_subscriptions: Vec<OrbSubscription> = process_data(subscriptions);
 
-                    let processed_subscriptions: Vec<OrbSubscription> = subscriptions
-                        .into_iter()
-                        .filter_map(|customer_result| match customer_result {
-                            Ok(customer) => Some(customer),
-                            Err(e) => {
-                                warning!("Error processing customer: {}", e);
-                                None
-                            }
-                        })
-                        .collect();
-
-                    info!(
-                        "Found {} subscriptions in Orb",
-                        processed_subscriptions.len()
-                    );
-                    serde_json::to_value(processed_subscriptions)
-                        .expect("failed deserializing users")
+                    match serde_json::to_value(processed_subscriptions) {
+                        Ok(value) => value,
+                        Err(e) => error!("{}", OrbFdwError::JsonSerializationError(e)),
+                    }
                 }
                 "invoices" => {
                     let invoices_stream = self
                         .client
-                        .list_invoices(&InvoiceListParams::DEFAULT.page_size(400));
+                        .list_invoices(&InvoiceListParams::DEFAULT.page_size(500));
                     let invoices = invoices_stream.collect::<Vec<_>>().await;
+                    let processed_invoices: Vec<OrbInvoice> = process_data(invoices);
 
-                    let processed_invoices: Vec<OrbInvoice> = invoices
-                        .into_iter()
-                        .filter_map(|customer_result| match customer_result {
-                            Ok(customer) => Some(customer),
-                            Err(e) => {
-                                warning!("Error processing customer: {}", e);
-                                None
-                            }
-                        })
-                        .collect();
-
-                    info!("Found {} subscriptions in Orb", processed_invoices.len());
-                    serde_json::to_value(processed_invoices).expect("failed deserializing users")
+                    match serde_json::to_value(processed_invoices) {
+                        Ok(value) => value,
+                        Err(e) => error!("{}", OrbFdwError::JsonSerializationError(e)),
+                    }
                 }
                 _ => {
                     warning!("unsupported object: {}", obj);
@@ -264,7 +260,10 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
                 }
             };
 
-            let mut rows = resp_to_rows(obj, &obj_js, &self.tgt_cols[..]);
+            let mut rows = match resp_to_rows(obj, &obj_js, &self.tgt_cols[..]) {
+                Ok(rows) => rows,
+                Err(e) => error!("{}", e),
+            };
             result.append(&mut rows);
             Ok(())
         });

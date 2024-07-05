@@ -17,14 +17,11 @@ pg_test = []
 [dependencies]
 pgrx = "=0.11.3"
 orb-billing = "0.11.0"
-# supabase-wrappers = "=0.1.18"
-supabase-wrappers = { git = "https://github.com/supabase/wrappers.git", default-features = false, rev = "99242d70eb7e551b700e2db31cc618850d835bc2" }
+supabase-wrappers = { version = "0.1.18", default-features = false }
 tokio = { version = "1", features = ["full"] }
 serde_json = "1.0"
 thiserror = "1.0.48"
 futures = "0.3.28"
-reqwest-middleware = "0.2.4"
-reqwest = { version = "0.11.4", features = ["json"] }
 
 [dev-dependencies]
 pgrx-tests = "=0.11.3"
