@@ -173,7 +173,7 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
         let token = if let Some(access_token) = options.get("api_key") {
             access_token.to_owned()
         } else {
-            warning!("Cannot find api_key in options, trying environment variable");
+            warning!("Cannot find api_key in options; trying environment variable");
             match env::var("ORB_API_KEY") {
                 Ok(key) => key,
                 Err(_) => {
