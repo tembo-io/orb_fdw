@@ -13,7 +13,6 @@ use orb_billing::{
     SubscriptionListParams,
 };
 
-// TODO: Remove all unwraps. Handle the errors
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> OrbFdwResult<Vec<Row>> {
     match obj {
         "customers" => body_to_rows(
@@ -77,11 +76,21 @@ fn body_to_rows(
 ) -> OrbFdwResult<Vec<Row>> {
     let mut result = Vec::new();
 
-    let objs = resp
-        .as_object()
-        .and_then(|v| v.get(obj_key))
-        .and_then(|v| v.as_array())
-        .ok_or(OrbFdwError::InvalidResponse(resp.to_string()))?;
+    let objs = if resp.is_array() {
+        match resp.as_array() {
+            Some(value) => value,
+            None => return Ok(result),
+        }
+    } else {
+        match resp
+            .as_object()
+            .and_then(|v| v.get(obj_key))
+            .and_then(|v| v.as_array())
+        {
+            Some(objs) => objs,
+            None => return Ok(result),
+        }
+    };
 
     for obj in objs {
         let mut row = Row::new();
