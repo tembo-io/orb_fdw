@@ -24,6 +24,9 @@ pub enum OrbFdwError {
     #[error("invalid api_key header")]
     InvalidApiKeyHeader,
 
+    #[error("api_key key not found")]
+    ApiKeyNotFound,
+
     #[error("request failed: {0}")]
     RequestError(#[from] reqwest::Error),
 
@@ -33,8 +36,11 @@ pub enum OrbFdwError {
     #[error("`limit` option must be an integer: {0}")]
     LimitOptionParseError(#[from] ParseIntError),
 
-    #[error("parse JSON response failed: {0}")]
-    JsonParseError(#[from] serde_json::Error),
+    #[error("JSON serialization error: {0}")]
+    JsonSerializationError(#[from] serde_json::Error),
+
+    #[error("Missing required option: '{0}'")]
+    MissingRequiredOption(String),
 }
 
 impl From<OrbFdwError> for ErrorReport {
@@ -43,4 +49,4 @@ impl From<OrbFdwError> for ErrorReport {
     }
 }
 
-pub type _OrbFdwResult<T> = Result<T, OrbFdwError>;
+pub type OrbFdwResult<T> = Result<T, OrbFdwError>;
