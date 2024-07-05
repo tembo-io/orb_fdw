@@ -14,23 +14,21 @@ use orb_billing::{
 };
 
 // TODO: Remove all unwraps. Handle the errors
-fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
+fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> OrbFdwResult<Vec<Row>> {
     match obj {
-        "customers" => {
-            body_to_rows(
-                resp,
-                "data",
-                vec![
-                    ("id", "user_id", "string"),
-                    ("external_customer_id", "organization_id", "string"),
-                    ("name", "first_name", "string"),
-                    ("email", "email", "string"),
-                    ("payment_provider_id", "stripe_id", "string"),
-                    ("created_at", "created_at", "timestamp_iso"),
-                ],
-                tgt_cols,
-            )
-        }
+        "customers" => body_to_rows(
+            resp,
+            "data",
+            vec![
+                ("id", "user_id", "string"),
+                ("external_customer_id", "organization_id", "string"),
+                ("name", "first_name", "string"),
+                ("email", "email", "string"),
+                ("payment_provider_id", "stripe_id", "string"),
+                ("created_at", "created_at", "timestamp_iso"),
+            ],
+            tgt_cols,
+        ),
         "subscriptions" => body_to_rows(
             resp,
             "data",
@@ -66,8 +64,7 @@ fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> Vec<Row> {
             tgt_cols,
         ),
         _ => {
-            warning!("unsupported object: {}", obj);
-            Vec::new()
+            error!("{}", OrbFdwError::ObjectNotImplemented(obj.to_string()))
         }
     }
 }
@@ -77,23 +74,14 @@ fn body_to_rows(
     obj_key: &str,
     normal_cols: Vec<(&str, &str, &str)>,
     tgt_cols: &[Column],
-) -> Vec<Row> {
+) -> OrbFdwResult<Vec<Row>> {
     let mut result = Vec::new();
 
-    let objs = if resp.is_array() {
-        // If `resp` is directly an array
-        resp.as_array().unwrap()
-    } else {
-        // If `resp` is an object containing the array under `obj_key`
-        match resp
-            .as_object()
-            .and_then(|v| v.get(obj_key))
-            .and_then(|v| v.as_array())
-        {
-            Some(objs) => objs,
-            None => return result,
-        }
-    };
+    let objs = resp
+        .as_object()
+        .and_then(|v| v.get(obj_key))
+        .and_then(|v| v.as_array())
+        .ok_or(OrbFdwError::InvalidResponse(resp.to_string()))?;
 
     for obj in objs {
         let mut row = Row::new();
@@ -113,15 +101,21 @@ fn body_to_rows(
                     "bool" => v.as_bool().map(Cell::Bool),
                     "i64" => v.as_i64().map(Cell::I64),
                     "string" => v.as_str().map(|a| Cell::String(a.to_owned())),
-                    "timestamp" => v.as_str().map(|a| {
-                        let secs = a.parse::<i64>().unwrap() / 1000;
-                        let ts = to_timestamp(secs as f64);
-                        Cell::Timestamp(ts.to_utc())
-                    }),
-                    "timestamp_iso" => v.as_str().map(|a| {
-                        let ts = Timestamp::from_str(a).unwrap();
-                        Cell::Timestamp(ts)
-                    }),
+                    "timestamp" => Some(
+                        v.as_str()
+                            .and_then(|a| a.parse::<i64>().ok())
+                            .map(|ms| to_timestamp(ms as f64 / 1000.0).to_utc())
+                            .map(Cell::Timestamp)
+                            .ok_or(OrbFdwError::InvalidTimestampFormat(v.to_string()))
+                            .ok()?,
+                    ),
+                    "timestamp_iso" => Some(
+                        v.as_str()
+                            .and_then(|a| Timestamp::from_str(a).ok())
+                            .map(Cell::Timestamp)
+                            .ok_or(OrbFdwError::InvalidTimestampFormat(v.to_string()))
+                            .ok()?,
+                    ),
                     "json" => Some(Cell::Json(JsonB(v.clone()))),
                     _ => None,
                 });
@@ -131,13 +125,13 @@ fn body_to_rows(
 
         // put all properties into 'attrs' JSON column
         if tgt_cols.iter().any(|c| &c.name == "attrs") {
-            let attrs = serde_json::from_str(&obj.to_string()).unwrap();
+            let attrs = serde_json::from_str(&obj.to_string())?;
             row.push("attrs", Some(Cell::Json(JsonB(attrs))));
         }
 
         result.push(row);
     }
-    result
+    Ok(result)
 }
 
 fn process_data<T, E: std::fmt::Display>(data: Vec<Result<T, E>>) -> Vec<T> {
@@ -257,7 +251,10 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
                 }
             };
 
-            let mut rows = resp_to_rows(obj, &obj_js, &self.tgt_cols[..]);
+            let mut rows = match resp_to_rows(obj, &obj_js, &self.tgt_cols[..]) {
+                Ok(rows) => rows,
+                Err(e) => error!("{}", e),
+            };
             result.append(&mut rows);
             Ok(())
         });
