@@ -144,6 +144,7 @@ fn body_to_rows(
 }
 
 fn process_data<T, E: std::fmt::Display>(data: Vec<Result<T, E>>) -> Vec<T> {
+    info!("Data: {}", data);
     data.into_iter()
         .filter_map(|item_result| match item_result {
             Ok(item) => Some(item),
@@ -156,7 +157,7 @@ fn process_data<T, E: std::fmt::Display>(data: Vec<Result<T, E>>) -> Vec<T> {
 }
 
 #[wrappers_fdw(
-    version = "0.12.1",
+    version = "0.12.2",
     author = "Jay Kothari",
     website = "https://github.com/orb_fdw",
     error_type = "OrbFdwError"
