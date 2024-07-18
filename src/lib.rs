@@ -158,7 +158,7 @@ fn process_data<T: std::fmt::Debug, E: std::fmt::Display + std::fmt::Debug>(
 }
 
 #[wrappers_fdw(
-    version = "0.12.2",
+    version = "0.13.0",
     author = "Jay Kothari",
     website = "https://github.com/orb_fdw",
     error_type = "OrbFdwError"
