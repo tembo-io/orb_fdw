@@ -143,8 +143,10 @@ fn body_to_rows(
     Ok(result)
 }
 
-fn process_data<T, E: std::fmt::Display>(data: Vec<Result<T, E>>) -> Vec<T> {
-    info!("Data: {}", data);
+fn process_data<T: std::fmt::Debug, E: std::fmt::Display + std::fmt::Debug>(
+    data: Vec<Result<T, E>>,
+) -> Vec<T> {
+    info!("Data: {:?}", data);
     data.into_iter()
         .filter_map(|item_result| match item_result {
             Ok(item) => Some(item),
