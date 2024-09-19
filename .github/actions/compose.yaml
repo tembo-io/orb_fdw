@@ -1,0 +1,12 @@
+services:
+  orb_fdw:
+    container_name: orb-local
+    build:
+      context: ../../tests
+    ports:
+      - "4242:4242"
+    healthcheck:
+      test: curl --fail http://0.0.0.0:4242/ || exit 1
+      interval: 11s
+      timeout: 6s
+      retries: 3
