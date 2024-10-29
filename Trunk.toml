@@ -6,7 +6,7 @@ description = "Postgres Foreign Data Wrapper for withorb.com Backend API"
 homepage = "https://github.com/tembo-io/orb_fdw"
 documentation = "https://github.com/tembo-io/orb_fdw"
 categories = ["connectors"]
-version = "0.13.0"
+version = "0.13.1"
 
 [build]
 postgres_version = "15"
