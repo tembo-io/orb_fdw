@@ -265,9 +265,8 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
                         }
                         break subscriptions;
                     };
-                    let processed_subscriptions: Vec<Subscription> = process_data(subscriptions);
 
-                    match serde_json::to_value(processed_subscriptions) {
+                    match serde_json::to_value(subscriptions) {
                         Ok(value) => value,
                         Err(e) => error!("{}", OrbFdwError::JsonSerializationError(e)),
                     }
