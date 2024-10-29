@@ -1,15 +1,16 @@
 use pgrx::{pg_sys, prelude::*, warning, JsonB};
 use serde_json::Value as JsonValue;
+use std::time::Duration;
 use std::{collections::HashMap, env, str::FromStr};
 use supabase_wrappers::prelude::*;
 use tokio::runtime::Runtime;
-use std::time::Duration;
 pg_module_magic!();
 mod orb_fdw;
 use crate::orb_fdw::{OrbFdwError, OrbFdwResult};
 use futures::StreamExt;
 use orb_billing::{
-    Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer, Invoice as OrbInvoice, InvoiceListParams, ListParams, Subscription, SubscriptionListParams
+    Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer,
+    Invoice as OrbInvoice, InvoiceListParams, ListParams, Subscription, SubscriptionListParams,
 };
 
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> OrbFdwResult<Vec<Row>> {
