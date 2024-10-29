@@ -10,7 +10,7 @@ use crate::orb_fdw::{OrbFdwError, OrbFdwResult};
 use futures::StreamExt;
 use orb_billing::{
     Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer,
-    Invoice as OrbInvoice, InvoiceListParams, ListParams, Subscription, SubscriptionListParams,
+    Invoice as OrbInvoice, InvoiceListParams, ListParams, SubscriptionListParams,
 };
 
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> OrbFdwResult<Vec<Row>> {
