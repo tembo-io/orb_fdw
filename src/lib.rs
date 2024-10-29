@@ -1,5 +1,6 @@
 use pgrx::{pg_sys, prelude::*, warning, JsonB};
 use serde_json::Value as JsonValue;
+use std::time::Duration;
 use std::{collections::HashMap, env, str::FromStr};
 use supabase_wrappers::prelude::*;
 use tokio::runtime::Runtime;
@@ -9,8 +10,7 @@ use crate::orb_fdw::{OrbFdwError, OrbFdwResult};
 use futures::StreamExt;
 use orb_billing::{
     Client as OrbClient, ClientConfig as OrbClientConfig, Customer as OrbCustomer,
-    Invoice as OrbInvoice, InvoiceListParams, ListParams, Subscription as OrbSubscription,
-    SubscriptionListParams,
+    Invoice as OrbInvoice, InvoiceListParams, ListParams, SubscriptionListParams,
 };
 
 fn resp_to_rows(obj: &str, resp: &JsonValue, tgt_cols: &[Column]) -> OrbFdwResult<Vec<Row>> {
@@ -233,13 +233,41 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
                     }
                 }
                 "subscriptions" => {
-                    let subscriptions_stream = self
-                        .client
-                        .list_subscriptions(&SubscriptionListParams::DEFAULT.page_size(500));
-                    let subscriptions = subscriptions_stream.collect::<Vec<_>>().await;
-                    let processed_subscriptions: Vec<OrbSubscription> = process_data(subscriptions);
+                    pub const MAX_ATTEMPTS: u8 = 3;
+                    let mut attempt = 1;
+                    let initial_page_size = 75;
 
-                    match serde_json::to_value(processed_subscriptions) {
+                    let subscriptions = 'outer: loop {
+                        // Reduce page size at every attempt, should reduce odds of request timeouts
+                        let page_size = initial_page_size / (attempt as u64);
+                        let params = SubscriptionListParams::DEFAULT.page_size(page_size);
+
+                        let subscriptions_stream = self.client.list_subscriptions(&params);
+                        let mut subscriptions_stream = Box::pin(subscriptions_stream);
+                        let mut subscriptions = Vec::new();
+
+                        while let Some(subscription_result) = subscriptions_stream.next().await {
+                            match subscription_result {
+                                Ok(subscription) => {
+                                    subscriptions.push(subscription);
+                                }
+                                Err(err) if attempt >= MAX_ATTEMPTS => {
+                                    warning!("Error getting Orb subscription after {attempt} attempts: {err}");
+                                }
+                                Err(err) => {
+                                    attempt += 1;
+                                    let backoff_duration = Duration::from_secs(2_u64.pow((attempt - 1) as u32));
+                                    warning!("Attempt no. {attempt} of fetching Orb subscriptions failed with {err}, trying again in {:.2} secs.", backoff_duration.as_secs_f64());
+
+                                    tokio::time::sleep(backoff_duration).await;
+                                    continue 'outer;
+                                }
+                            }
+                        }
+                        break subscriptions;
+                    };
+
+                    match serde_json::to_value(subscriptions) {
                         Ok(value) => value,
                         Err(e) => error!("{}", OrbFdwError::JsonSerializationError(e)),
                     }

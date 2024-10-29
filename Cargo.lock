@@ -1548,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "orb_fdw"
-version = "0.13.0"
+version = "0.13.1"
 dependencies = [
  "futures",
  "orb-billing",

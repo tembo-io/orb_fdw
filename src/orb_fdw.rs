@@ -19,6 +19,9 @@ pub enum OrbFdwError {
 
     #[error("Missing required option: '{0}'")]
     MissingRequiredOption(String),
+
+    #[error("Failed to fetch from Orb: '{0}'")]
+    NetworkError(String),
 }
 
 impl From<OrbFdwError> for ErrorReport {
