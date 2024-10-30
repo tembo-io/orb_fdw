@@ -171,9 +171,9 @@ pub(crate) struct OrbFdw {
 }
 
 impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
-    fn new(options: &HashMap<String, String>) -> OrbFdwResult<Self> {
-        let token = if let Some(access_token) = options.get("api_key") {
-            access_token.to_owned()
+    fn new(server: supabase_wrappers::prelude::ForeignServer) -> OrbFdwResult<Self> {
+        let token = if let Some(access_token) = server.options.get("api_key") {
+            access_token.to_string()
         } else {
             warning!("Cannot find api_key in options; trying environment variable");
             match env::var("ORB_API_KEY") {
