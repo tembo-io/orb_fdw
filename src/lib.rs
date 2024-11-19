@@ -6,6 +6,9 @@ use supabase_wrappers::prelude::*;
 use tokio::runtime::Runtime;
 pg_module_magic!();
 mod orb_fdw;
+mod tests;
+use pgrx::prelude::*;
+pub use pgrx;
 use crate::orb_fdw::{OrbFdwError, OrbFdwResult};
 use futures::StreamExt;
 use orb_billing::{
@@ -298,6 +301,7 @@ impl ForeignDataWrapper<OrbFdwError> for OrbFdw {
             Ok(())
         });
 
+        info!("data found: {:?}", result);
         run.expect("failed to run async block");
         self.scan_result = Some(result);
         Ok(())
