@@ -1,6 +1,6 @@
 [package]
 name = "orb_fdw"
-version = "0.13.2"
+version = "0.13.3"
 edition = "2021"
 publish = false
 
@@ -12,20 +12,21 @@ name = "pgrx_embed_orb_fdw"
 path = "./src/bin/pgrx_embed.rs"
 
 [features]
-default = ["pg16"]
+default = ["pg17"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14", "supabase-wrappers/pg14"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15", "supabase-wrappers/pg15"]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16", "supabase-wrappers/pg16"]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17", "supabase-wrappers/pg17"]
 pg_test = []
 
 [dependencies]
 pgrx = "=0.12.6"
 orb-billing = "0.11.0"
-supabase-wrappers = { version = "0.1.18", default-features = false }
+supabase-wrappers = { version = "0.1.20", default-features = false }
 tokio = { version = "1", features = ["full"] }
 serde_json = "1.0"
-thiserror = "1.0.48"
-futures = "0.3.28"
+thiserror = "1.0.69"
+futures = "0.3.31"
 
 [dev-dependencies]
 pgrx-tests = "=0.12.6"
